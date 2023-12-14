@@ -109,11 +109,36 @@ fn choose_n(n: usize, max: usize, exclude: usize) -> Vec<usize> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    type SillyVec = [f32; 8];
+    struct SillyComparator {
+        data: Arc<Vec<SillyVec>>,
+    }
+
+    impl Comparator<SillyVec> for SillyComparator {
+        fn compare_stored(&self, v1: VectorId, v2: VectorId) -> f32 {
+            let v1 = &self.data[v1.0];
+            let v2 = &self.data[v2.0];
+            self.compare_unstored(v1, v2)
+        }
+
+        fn compare_half_stored(&self, v1: VectorId, v2: &SillyVec) -> f32 {
+            let v1 = &self.data[v1.0];
+            self.compare_unstored(v1, v2)
+        }
+
+        fn compare_unstored(&self, v1: &SillyVec, v2: &SillyVec) -> f32 {
+            let mut result = 0.0;
+            for (&f1, &f2) in v1.iter().zip(v2.iter()) {
+                result += f1 * f2;
+            }
+
+            result
+        }
+    }
 
     #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+    fn it_works() {}
 }
