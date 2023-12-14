@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate timeit;
+
 use std::{cell::UnsafeCell, collections::HashSet, marker::PhantomData};
 
 use rand::{thread_rng, Rng};
@@ -25,14 +28,14 @@ impl Ord for OrderedFloat {
     }
 }
 
-pub struct Layer<const NeighborhoodSize: usize, C: Comparator<T>, T> {
+pub struct Layer<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> {
     comparator: C,
     nodes: Vec<VectorId>,
     neighbors: Vec<NodeId>,
     _phantom: PhantomData<T>,
 }
 
-impl<const NeighborhoodSize: usize, C: Comparator<T>, T> Layer<NeighborhoodSize, C, T> {
+impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZE, C, T> {
     fn get_node(&self, v: VectorId) -> NodeId {
         NodeId(self.nodes.binary_search(&v).unwrap())
     }
@@ -42,7 +45,7 @@ impl<const NeighborhoodSize: usize, C: Comparator<T>, T> Layer<NeighborhoodSize,
     }
 
     fn get_neighbours(&self, n: NodeId) -> &[NodeId] {
-        &self.neighbors[(n.0 * NeighborhoodSize)..((n.0 + 1) * NeighborhoodSize)]
+        &self.neighbors[(n.0 * NEIGHBORHOOD_SIZE)..((n.0 + 1) * NEIGHBORHOOD_SIZE)]
     }
 
     pub fn generate(comparator: C, vs: Vec<VectorId>) -> Self {
@@ -51,15 +54,15 @@ impl<const NeighborhoodSize: usize, C: Comparator<T>, T> Layer<NeighborhoodSize,
         let mut all_distances: Vec<_> = vs
             .par_iter()
             .map(|id| {
-                let choices = choose_n(NeighborhoodSize * 10, vs.len(), id.0);
-                let mut distances = vec![(0, 0.0); NeighborhoodSize * 10];
+                let choices = choose_n(NEIGHBORHOOD_SIZE * 10, max, id.0);
+                let mut distances = vec![(0, 0.0); NEIGHBORHOOD_SIZE * 10];
                 for i in 0..choices.len() {
                     let choice = choices[i];
                     let distance = comparator.compare_stored(*id, VectorId(choice));
                     distances[i] = (choice, distance);
                 }
                 distances.sort_by_key(|d| OrderedFloat(d.1));
-                distances.truncate(NeighborhoodSize);
+                distances.truncate(NEIGHBORHOOD_SIZE);
 
                 UnsafeCell::new(distances)
             })
@@ -73,16 +76,19 @@ impl<const NeighborhoodSize: usize, C: Comparator<T>, T> Layer<NeighborhoodSize,
             }
         }
 
-        let mut neighbors = vec![NodeId(0); vs.len() * NeighborhoodSize];
-        for i in 0..all_distances.len() {
-            let distances = all_distances[i].get_mut();
-            distances.sort_by_key(|d| OrderedFloat(d.1));
-            distances.dedup();
-            distances.truncate(NeighborhoodSize);
-            for j in 0..distances.len() {
-                neighbors[i * NeighborhoodSize + j] = NodeId(distances[j].0);
-            }
-        }
+        let mut neighbors = vec![NodeId(0); vs.len() * NEIGHBORHOOD_SIZE];
+        all_distances
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(i, distances)| {
+                let distances = distances.get_mut();
+                distances.sort_by_key(|d| OrderedFloat(d.1));
+                distances.dedup();
+                distances.truncate(NEIGHBORHOOD_SIZE);
+                for j in 0..distances.len() {
+                    neighbors[i * NEIGHBORHOOD_SIZE + j] = NodeId(distances[j].0);
+                }
+            });
 
         Self {
             comparator,
@@ -109,12 +115,16 @@ fn choose_n(n: usize, max: usize, exclude: usize) -> Vec<usize> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{
+        atomic::{self, AtomicUsize},
+        Arc,
+    };
 
     use super::*;
     type SillyVec = [f32; 8];
+    #[derive(Clone)]
     struct SillyComparator {
-        data: Arc<Vec<SillyVec>>,
+        data: Vec<SillyVec>,
     }
 
     impl Comparator<SillyVec> for SillyComparator {
@@ -134,11 +144,31 @@ mod tests {
             for (&f1, &f2) in v1.iter().zip(v2.iter()) {
                 result += f1 * f2;
             }
-
             result
         }
     }
 
+    fn generate_random_vector() -> [f32; 8] {
+        let mut rng = thread_rng();
+        rng.gen()
+    }
+
+    fn create_test_data() -> SillyComparator {
+        let mut vec = Vec::new();
+        for _ in 0..10000 {
+            vec.push(generate_random_vector());
+        }
+        SillyComparator { data: vec }
+    }
+
     #[test]
-    fn it_works() {}
+    fn it_works() {
+        let comparator = create_test_data();
+        let vs: Vec<VectorId> = (0..10000).map(VectorId).collect();
+        timeit!({
+            let result: Layer<10, _, _> = Layer::generate(comparator.clone(), vs.clone());
+            drop(result);
+        });
+        panic!();
+    }
 }

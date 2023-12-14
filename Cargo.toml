@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 rand = "0.8.5"
 rayon = "1.8.0"
+timeit = "0.1.2"
