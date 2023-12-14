@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate timeit;
 
-use std::{cell::UnsafeCell, collections::HashSet, marker::PhantomData};
+use std::{cell::UnsafeCell, collections::HashSet, marker::PhantomData, sync::Mutex};
 
 use rand::{thread_rng, Rng};
 use rayon::prelude::*;
@@ -76,7 +76,8 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZ
             }
         }
 
-        let mut neighbors = vec![NodeId(0); vs.len() * NEIGHBORHOOD_SIZE];
+        // this neighbors, despite seemingly immutable, is going to be mutated unsafely!
+        let neighbors = vec![NodeId(0); vs.len() * NEIGHBORHOOD_SIZE];
         all_distances
             .par_iter_mut()
             .enumerate()
@@ -85,9 +86,14 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZ
                 distances.sort_by_key(|d| OrderedFloat(d.1));
                 distances.dedup();
                 distances.truncate(NEIGHBORHOOD_SIZE);
-                for j in 0..distances.len() {
-                    neighbors[i * NEIGHBORHOOD_SIZE + j] = NodeId(distances[j].0);
-                }
+                // We know we have a unique index here that is not
+                // going to be contended. Therefore we just use
+                // unsafe.
+                let unsafe_neighbors: *mut NodeId = neighbors.as_ptr() as *mut NodeId;
+                (0..distances.len()).for_each(|j| unsafe {
+                    let offset = unsafe_neighbors.add(i * NEIGHBORHOOD_SIZE + j);
+                    *offset = NodeId(distances[j].0);
+                });
             });
 
         Self {
