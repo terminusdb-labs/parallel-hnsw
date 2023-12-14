@@ -3,7 +3,7 @@ extern crate timeit;
 
 use std::{cell::UnsafeCell, collections::HashSet, marker::PhantomData, sync::Mutex};
 
-use rand::{thread_rng, Rng};
+use rand::{rngs::StdRng, thread_rng, Rng, RngCore, SeedableRng};
 use rayon::prelude::*;
 
 #[derive(PartialEq, Eq, Debug, PartialOrd, Ord, Clone, Copy, Hash)]
@@ -11,7 +11,7 @@ pub struct VectorId(pub usize);
 #[derive(PartialEq, Eq, Debug, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct NodeId(pub usize);
 
-pub trait Comparator<T>: Sync {
+pub trait Comparator<T>: Sync + Clone {
     fn compare_stored(&self, v1: VectorId, v2: VectorId) -> f32;
     fn compare_half_stored(&self, v1: VectorId, v2: &T) -> f32;
     fn compare_unstored(&self, v1: &T, v2: &T) -> f32;
@@ -28,6 +28,7 @@ impl Ord for OrderedFloat {
     }
 }
 
+#[derive(PartialEq, PartialOrd, Debug)]
 pub struct Layer<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> {
     comparator: C,
     nodes: Vec<VectorId>,
@@ -36,8 +37,8 @@ pub struct Layer<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> {
 }
 
 impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZE, C, T> {
-    fn get_node(&self, v: VectorId) -> NodeId {
-        NodeId(self.nodes.binary_search(&v).unwrap())
+    fn get_node(&self, v: VectorId) -> Option<NodeId> {
+        self.nodes.binary_search(&v).ok().map(NodeId)
     }
 
     fn get_vector(&self, n: NodeId) -> VectorId {
@@ -86,27 +87,84 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZ
         result
     }
 
+    pub fn closest_vectors(&self, v: VectorId, number_of_vectors: usize) -> Vec<(VectorId, f32)> {
+        self.closest_nodes(v, number_of_vectors)
+            .iter()
+            .map(|(node_id, distance)| (self.get_vector(*node_id), *distance))
+            .collect()
+    }
+
     pub fn closest_vector(&self, v: VectorId) -> (VectorId, f32) {
         let (node_id, distance) = self.closest_nodes(v, 1)[0];
         (self.get_vector(node_id), distance)
     }
+}
 
-    pub fn generate(comparator: C, vs: Vec<VectorId>) -> Self {
+#[derive(PartialEq, PartialOrd, Debug)]
+pub struct Hnsw<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T: Sync> {
+    layers: Vec<Layer<NEIGHBORHOOD_SIZE, C, T>>,
+}
+
+impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T: Sync> Hnsw<NEIGHBORHOOD_SIZE, C, T> {
+    pub fn get_layer(&self, i: usize) -> Option<&Layer<NEIGHBORHOOD_SIZE, C, T>> {
+        if self.layers.len() > i {
+            Some(&self.layers[self.layers.len() - i - 1])
+        } else {
+            None
+        }
+    }
+
+    pub fn get_layer_above(&self, i: usize) -> Option<&Layer<NEIGHBORHOOD_SIZE, C, T>> {
+        self.get_layer(i + 1)
+    }
+
+    pub fn initial_vector_distances(
+        &self,
+        v: VectorId,
+        level: usize,
+        number_of_nodes: usize,
+    ) -> Vec<(VectorId, f32)> {
+        self.get_layer_above(level)
+            .map(|previous_layer| previous_layer.closest_vectors(v, number_of_nodes))
+            .unwrap_or_default()
+    }
+
+    pub fn generate_layer(
+        &self,
+        comparator: C,
+        vs: Vec<VectorId>,
+        level: usize,
+    ) -> Layer<NEIGHBORHOOD_SIZE, C, T> {
         let max = vs.len();
-
+        let number_of_supers_to_check = 1;
         let mut all_distances: Vec<_> = vs
             .par_iter()
             .map(|id| {
-                let choices = choose_n(NEIGHBORHOOD_SIZE * 10, max, id.0);
-                let mut distances = vec![(0, 0.0); NEIGHBORHOOD_SIZE * 10];
+                let initial_vector_distances =
+                    self.initial_vector_distances(*id, level, number_of_supers_to_check);
+                let number_of_checked_supers = std::cmp::max(0, number_of_supers_to_check);
+
+                let number_of_nodes_to_check = std::cmp::min(NEIGHBORHOOD_SIZE * 10, max - 1);
+                let choice_count =
+                    std::cmp::min(number_of_nodes_to_check - number_of_checked_supers, max - 1);
+                let prng = StdRng::seed_from_u64(level as u64 + id.0 as u64 + vs.len() as u64);
+
+                let choices = choose_n(choice_count, max, id.0, prng);
+                let mut distances =
+                    vec![(!0, f32::MAX); choices.len() + initial_vector_distances.len()];
                 for i in 0..choices.len() {
                     let choice = choices[i];
                     let distance = comparator.compare_stored(*id, VectorId(choice));
                     distances[i] = (choice, distance);
                 }
+                // add also our super nodes
+                for (i, (super_vector, distance)) in
+                    (choices.len()..number_of_nodes_to_check).zip(initial_vector_distances)
+                {
+                    distances[i] = (super_vector.0, distance);
+                }
                 distances.sort_by_key(|d| OrderedFloat(d.1));
                 distances.truncate(NEIGHBORHOOD_SIZE);
-
                 UnsafeCell::new(distances)
             })
             .collect();
@@ -120,7 +178,7 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZ
         }
 
         // this neighbors, despite seemingly immutable, is going to be mutated unsafely!
-        let neighbors = vec![NodeId(0); vs.len() * NEIGHBORHOOD_SIZE];
+        let neighbors = vec![NodeId(!0); vs.len() * NEIGHBORHOOD_SIZE];
         all_distances
             .par_iter_mut()
             .enumerate()
@@ -139,30 +197,112 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZ
                 });
             });
 
-        Self {
+        Layer {
             comparator,
             nodes: vs,
             neighbors,
             _phantom: PhantomData,
         }
     }
+
+    pub fn generate(c: C, vs: Vec<VectorId>) -> Self {
+        let total_size = vs.len();
+        let layer_count = total_size.checked_ilog(NEIGHBORHOOD_SIZE).unwrap_or(1) as usize;
+        let layers = Vec::with_capacity(layer_count);
+        let mut hnsw: Hnsw<NEIGHBORHOOD_SIZE, C, T> = Hnsw { layers };
+        for i in 0..layer_count {
+            let level = layer_count - i - 1;
+            let layer_size = NEIGHBORHOOD_SIZE.pow(i as u32 + 1);
+            let slice = &vs[0..layer_size];
+            let layer = hnsw.generate_layer(c.clone(), slice.to_vec(), level);
+            hnsw.layers.push(layer)
+        }
+
+        hnsw
+    }
 }
 
-fn choose_n(n: usize, max: usize, exclude: usize) -> Vec<usize> {
-    let mut rng = thread_rng();
+fn choose_n(n: usize, max: usize, exclude: usize, mut prng: StdRng) -> Vec<usize> {
     let mut count = 0;
     let mut set = HashSet::with_capacity(n);
     while count != n {
-        let selection = rng.gen_range(0..max);
+        let selection = prng.gen_range(0..max);
         if selection != exclude && set.insert(selection) {
             count += 1;
         }
     }
-
     set.into_iter().collect()
 }
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
+    type SillyVec = [f32; 3];
+    #[derive(Clone, Debug, PartialEq)]
+    struct SillyComparator {
+        data: Vec<SillyVec>,
+    }
+
+    impl Comparator<SillyVec> for SillyComparator {
+        fn compare_stored(&self, v1: VectorId, v2: VectorId) -> f32 {
+            let v1 = &self.data[v1.0];
+            let v2 = &self.data[v2.0];
+            self.compare_unstored(v1, v2)
+        }
+
+        fn compare_half_stored(&self, v1: VectorId, v2: &SillyVec) -> f32 {
+            let v1 = &self.data[v1.0];
+            self.compare_unstored(v1, v2)
+        }
+
+        fn compare_unstored(&self, v1: &SillyVec, v2: &SillyVec) -> f32 {
+            let mut result = 0.0;
+            for (&f1, &f2) in v1.iter().zip(v2.iter()) {
+                result += f1 * f2;
+            }
+            result
+        }
+    }
+
+    #[test]
+    fn test_generation() {
+        let data: Vec<SillyVec> = vec![
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.0, -1.0],
+            [0.7071, 0.7071, 0.0],
+            [0.0, 0.7071, 0.7071],
+            [0.5773, 0.5773, 0.5773],
+        ];
+        let c = SillyComparator { data: data.clone() };
+        let vs: Vec<_> = (0..10).map(VectorId).collect();
+        const SIZE: usize = 3;
+
+        let hnsw: Hnsw<SIZE, SillyComparator, SillyVec> = Hnsw::generate(c, vs);
+        assert_eq!(
+            hnsw.get_layer(1).map(|layer| &layer.nodes),
+            Some(vec![VectorId(0), VectorId(1), VectorId(2)].as_ref())
+        );
+        assert_eq!(
+            hnsw.get_layer(1).map(|layer| &layer.neighbors),
+            Some(
+                vec![
+                    NodeId(1),
+                    NodeId(18446744073709551615),
+                    NodeId(18446744073709551615),
+                    NodeId(0),
+                    NodeId(2),
+                    NodeId(18446744073709551615),
+                    NodeId(1),
+                    NodeId(18446744073709551615),
+                    NodeId(18446744073709551615)
+                ]
+                .as_ref()
+            )
+        );
+    }
 }
