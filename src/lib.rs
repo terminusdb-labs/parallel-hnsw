@@ -7,9 +7,9 @@ use rand::{thread_rng, Rng};
 use rayon::prelude::*;
 
 #[derive(PartialEq, Eq, Debug, PartialOrd, Ord, Clone, Copy)]
-pub struct VectorId(usize);
+pub struct VectorId(pub usize);
 #[derive(PartialEq, Eq, Debug, PartialOrd, Ord, Clone, Copy)]
-pub struct NodeId(usize);
+pub struct NodeId(pub usize);
 
 pub trait Comparator<T>: Sync {
     fn compare_stored(&self, v1: VectorId, v2: VectorId) -> f32;
