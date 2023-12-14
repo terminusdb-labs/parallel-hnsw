@@ -67,7 +67,12 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZ
                     )
                 })
                 .collect();
-            visit_queue.extend(neighbor_distances.iter().map(|(node, _)| *node));
+            visit_queue.extend(
+                neighbor_distances
+                    .iter()
+                    .filter(|(_, d)| worst.is_none() || worst.as_ref().unwrap().1 > *d)
+                    .map(|(node, _)| *node),
+            );
 
             result.extend(neighbor_distances);
             result.sort_by_key(|(_, distance)| OrderedFloat(*distance));
