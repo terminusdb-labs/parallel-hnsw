@@ -6,9 +6,9 @@ use std::{cell::UnsafeCell, collections::HashSet, marker::PhantomData, sync::Mut
 use rand::{thread_rng, Rng};
 use rayon::prelude::*;
 
-#[derive(PartialEq, Eq, Debug, PartialOrd, Ord, Clone, Copy)]
+#[derive(PartialEq, Eq, Debug, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct VectorId(pub usize);
-#[derive(PartialEq, Eq, Debug, PartialOrd, Ord, Clone, Copy)]
+#[derive(PartialEq, Eq, Debug, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct NodeId(pub usize);
 
 pub trait Comparator<T>: Sync {
@@ -44,8 +44,46 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZ
         self.nodes[n.0]
     }
 
-    fn get_neighbours(&self, n: NodeId) -> &[NodeId] {
+    fn get_neighbors(&self, n: NodeId) -> &[NodeId] {
         &self.neighbors[(n.0 * NEIGHBORHOOD_SIZE)..((n.0 + 1) * NEIGHBORHOOD_SIZE)]
+    }
+
+    pub fn closest_nodes(&self, v: VectorId, number_of_nodes: usize) -> Vec<(NodeId, f32)> {
+        let mut result: Vec<(NodeId, f32)> = Vec::new();
+        let mut visit_queue = vec![NodeId(0)];
+        let mut visited: HashSet<NodeId> = HashSet::new();
+        while let Some(next) = visit_queue.pop() {
+            visited.insert(next);
+            let worst = result.last().cloned();
+            let neighbors = self.get_neighbors(next);
+            let neighbor_distances: Vec<_> = neighbors
+                .iter()
+                .enumerate()
+                .filter(|(_ix, n)| !visited.contains(*n))
+                .map(|(ix, n)| {
+                    (
+                        NodeId(ix),
+                        self.comparator.compare_stored(v, self.get_vector(*n)),
+                    )
+                })
+                .collect();
+            visit_queue.extend(neighbor_distances.iter().map(|(node, _)| *node));
+
+            result.extend(neighbor_distances);
+            result.sort_by_key(|(_, distance)| OrderedFloat(*distance));
+            result.truncate(number_of_nodes);
+            let new_worst = result.last().cloned();
+            if worst == new_worst {
+                break;
+            }
+        }
+
+        result
+    }
+
+    pub fn closest_vector(&self, v: VectorId) -> (VectorId, f32) {
+        let (node_id, distance) = self.closest_nodes(v, 1)[0];
+        (self.get_vector(node_id), distance)
     }
 
     pub fn generate(comparator: C, vs: Vec<VectorId>) -> Self {
