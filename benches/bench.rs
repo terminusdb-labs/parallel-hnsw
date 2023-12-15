@@ -1,7 +1,7 @@
 #![feature(test)]
 extern crate test;
 
-use parallel_hnsw::{Comparator, Hnsw, Layer, VectorId};
+use parallel_hnsw::{AbstractVector, Comparator, Hnsw, Layer, VectorId};
 use rand::{thread_rng, Rng};
 use test::Bencher;
 type SillyVec = [f32; 100];
@@ -11,23 +11,20 @@ struct SillyComparator {
 }
 
 impl Comparator<SillyVec> for SillyComparator {
-    fn compare_stored(&self, v1: VectorId, v2: VectorId) -> f32 {
-        let v1 = &self.data[v1.0];
-        let v2 = &self.data[v2.0];
-        self.compare_unstored(v1, v2)
-    }
-
-    fn compare_half_stored(&self, v1: VectorId, v2: &SillyVec) -> f32 {
-        let v1 = &self.data[v1.0];
-        self.compare_unstored(v1, v2)
-    }
-
-    fn compare_unstored(&self, v1: &SillyVec, v2: &SillyVec) -> f32 {
+    fn compare_vec(&self, v1: AbstractVector<SillyVec>, v2: AbstractVector<SillyVec>) -> f32 {
+        let v1 = match v1 {
+            AbstractVector::Stored(i) => &self.data[i.0],
+            AbstractVector::Unstored(v) => v,
+        };
+        let v2 = match v2 {
+            AbstractVector::Stored(i) => &self.data[i.0],
+            AbstractVector::Unstored(v) => v,
+        };
         let mut result = 0.0;
         for (&f1, &f2) in v1.iter().zip(v2.iter()) {
-            result += f1 * f2;
+            result += f1 * f2
         }
-        result
+        1.0 - result
     }
 }
 

@@ -9,10 +9,22 @@ pub struct VectorId(pub usize);
 #[derive(PartialEq, Eq, Debug, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct NodeId(pub usize);
 
+pub enum AbstractVector<'a, T> {
+    Stored(VectorId),
+    Unstored(&'a T),
+}
+
+impl<'a, T> Clone for AbstractVector<'a, T> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Stored(arg0) => Self::Stored(*arg0),
+            Self::Unstored(arg0) => Self::Unstored(arg0),
+        }
+    }
+}
+
 pub trait Comparator<T>: Sync + Clone {
-    fn compare_stored(&self, v1: VectorId, v2: VectorId) -> f32;
-    fn compare_half_stored(&self, v1: VectorId, v2: &T) -> f32;
-    fn compare_unstored(&self, v1: &T, v2: &T) -> f32;
+    fn compare_vec<'a, 'b>(&self, v1: AbstractVector<'a, T>, v2: AbstractVector<'b, T>) -> f32;
 }
 
 #[derive(PartialEq, PartialOrd, Clone, Copy, Debug)]
@@ -48,7 +60,11 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZ
         &self.neighbors[(n.0 * NEIGHBORHOOD_SIZE)..((n.0 + 1) * NEIGHBORHOOD_SIZE)]
     }
 
-    pub fn closest_nodes(&self, v: VectorId, number_of_nodes: usize) -> Vec<(NodeId, f32)> {
+    pub fn closest_nodes<'a>(
+        &self,
+        v: AbstractVector<'a, T>,
+        number_of_nodes: usize,
+    ) -> Vec<(NodeId, f32)> {
         let mut result: Vec<(NodeId, f32)> = Vec::new();
         let mut visit_queue = vec![(NodeId(0), f32::MAX)];
         let mut visited: HashSet<NodeId> = HashSet::new();
@@ -63,7 +79,8 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZ
                 .map(|(ix, n)| {
                     (
                         NodeId(ix),
-                        self.comparator.compare_stored(v, self.get_vector(*n)),
+                        self.comparator
+                            .compare_vec(v.clone(), AbstractVector::Stored(self.get_vector(*n))),
                     )
                 })
                 .collect();
@@ -86,14 +103,18 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZ
         result
     }
 
-    pub fn closest_vectors(&self, v: VectorId, number_of_vectors: usize) -> Vec<(VectorId, f32)> {
+    pub fn closest_vectors<'a>(
+        &self,
+        v: AbstractVector<'a, T>,
+        number_of_vectors: usize,
+    ) -> Vec<(VectorId, f32)> {
         self.closest_nodes(v, number_of_vectors)
             .iter()
             .map(|(node_id, distance)| (self.get_vector(*node_id), *distance))
             .collect()
     }
 
-    pub fn closest_vector(&self, v: VectorId) -> (VectorId, f32) {
+    pub fn closest_vector<'a>(&self, v: AbstractVector<'a, T>) -> (VectorId, f32) {
         let (node_id, distance) = self.closest_nodes(v, 1)[0];
         (self.get_vector(node_id), distance)
     }
@@ -124,7 +145,9 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T: Sync> Hnsw<NEIGHBORHOO
         number_of_nodes: usize,
     ) -> Vec<(VectorId, f32)> {
         self.get_layer_above(level)
-            .map(|previous_layer| previous_layer.closest_vectors(v, number_of_nodes))
+            .map(|previous_layer| {
+                previous_layer.closest_vectors(AbstractVector::Stored(v), number_of_nodes)
+            })
             .unwrap_or_default()
     }
 
@@ -132,8 +155,11 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T: Sync> Hnsw<NEIGHBORHOO
         self.layers.len()
     }
 
-    /*
-    pub fn search(&self, v: VectorId, number_of_candidates: usize) -> Vec<(VectorId, f32)> {
+    pub fn search<'a>(
+        &self,
+        v: AbstractVector<'a, T>,
+        number_of_candidates: usize,
+    ) -> Vec<(VectorId, f32)> {
         let upper_layer_candidate_count = 1;
         let mut candidates_queue = Vec::new();
         for i in 0..self.layer_count() {
@@ -143,13 +169,13 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T: Sync> Hnsw<NEIGHBORHOO
                 upper_layer_candidate_count
             };
             let layer = &self.layers[i];
-            let closest = layer.closest_vectors(v, candidate_count);
+            let closest = layer.closest_vectors(v.clone(), candidate_count);
             candidates_queue.extend(closest);
-            candidates_queue.sort_by_key(|(_, d)| OrderedFloat(d));
+            candidates_queue.sort_by_key(|(_, d)| OrderedFloat(*d));
             candidates_queue.truncate(number_of_candidates);
         }
         candidates_queue
-    }*/
+    }
 
     pub fn generate_layer(
         &self,
@@ -202,7 +228,10 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T: Sync> Hnsw<NEIGHBORHOO
                         let partition_choices = choose_n(choice_count, max, node_id.0, prng);
                         for i in 0..partition_choices.len() {
                             let choice = &partition[partition_choices[i]];
-                            let distance = borrowed_comparator.compare_stored(*vector_id, choice.1);
+                            let distance = borrowed_comparator.compare_vec(
+                                AbstractVector::Stored(*vector_id),
+                                AbstractVector::Stored(choice.1),
+                            );
                             distances.push((choice.0, distance));
                         }
                         distances.sort_by_key(|d| OrderedFloat(d.1));
@@ -290,18 +319,15 @@ mod tests {
     }
 
     impl Comparator<SillyVec> for SillyComparator {
-        fn compare_stored(&self, v1: VectorId, v2: VectorId) -> f32 {
-            let v1 = &self.data[v1.0];
-            let v2 = &self.data[v2.0];
-            self.compare_unstored(v1, v2)
-        }
-
-        fn compare_half_stored(&self, v1: VectorId, v2: &SillyVec) -> f32 {
-            let v1 = &self.data[v1.0];
-            self.compare_unstored(v1, v2)
-        }
-
-        fn compare_unstored(&self, v1: &SillyVec, v2: &SillyVec) -> f32 {
+        fn compare_vec(&self, v1: AbstractVector<SillyVec>, v2: AbstractVector<SillyVec>) -> f32 {
+            let v1 = match v1 {
+                AbstractVector::Stored(i) => &self.data[i.0],
+                AbstractVector::Unstored(v) => v,
+            };
+            let v2 = match v2 {
+                AbstractVector::Stored(i) => &self.data[i.0],
+                AbstractVector::Unstored(v) => v,
+            };
             let mut result = 0.0;
             for (&f1, &f2) in v1.iter().zip(v2.iter()) {
                 result += f1 * f2
