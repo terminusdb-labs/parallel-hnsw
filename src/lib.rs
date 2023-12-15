@@ -65,7 +65,13 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZ
         v: AbstractVector<T>,
         number_of_nodes: usize,
     ) -> Vec<(NodeId, f32)> {
-        let mut result: Vec<(NodeId, f32)> = Vec::new();
+        let mut result: Vec<(NodeId, f32)> = vec![(
+            NodeId(0),
+            self.comparator.compare_vec(
+                v.clone(),
+                AbstractVector::Stored(self.get_vector(NodeId(0))),
+            ),
+        )];
         let mut visit_queue = vec![(NodeId(0), f32::MAX)];
         let mut visited: HashSet<NodeId> = HashSet::new();
         while let Some((next, _)) = visit_queue.pop() {
@@ -73,17 +79,17 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZ
             let worst = result.last().cloned();
             let neighbors = self.get_neighbors(next);
             let neighbor_distances: Vec<_> = neighbors
-                .iter()
-                .enumerate() // Remove empty cells and previously visited nodes
-                .filter(|(_ix, n)| n.0 != !0 && !visited.contains(*n))
-                .map(|(ix, n)| {
+                .iter() // Remove empty cells and previously visited nodes
+                .filter(|n| n.0 != !0 && !visited.contains(*n))
+                .map(|n| {
                     (
-                        NodeId(ix),
+                        *n,
                         self.comparator
                             .compare_vec(v.clone(), AbstractVector::Stored(self.get_vector(*n))),
                     )
                 })
                 .collect();
+            visited.extend(neighbor_distances.iter().map(|(n, _)| n));
             visit_queue.extend(
                 neighbor_distances
                     .iter()
@@ -93,8 +99,8 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZ
             result.extend(neighbor_distances);
             result.sort_by_key(|(_, distance)| OrderedFloat(*distance));
             result.truncate(number_of_nodes);
-            let new_worst = result.last().cloned();
-            if worst == new_worst {
+
+            if result.len() == number_of_nodes && worst == result.last().cloned() {
                 break;
             }
             visit_queue.sort_by_key(|(_, distance)| OrderedFloat(*distance));
@@ -163,7 +169,7 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T: Sync> Hnsw<NEIGHBORHOO
         let upper_layer_candidate_count = 1;
         let mut candidates_queue = Vec::new();
         for i in 0..self.layer_count() {
-            let candidate_count = if i == self.layer_count() {
+            let candidate_count = if i == self.layer_count() - 1 {
                 number_of_candidates
             } else {
                 upper_layer_candidate_count
@@ -185,7 +191,7 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T: Sync> Hnsw<NEIGHBORHOO
         level: usize,
     ) -> Layer<NEIGHBORHOOD_SIZE, C, T> {
         // Parameter for the number of neighbours to look at from above.
-        let number_of_supers_to_check = 1;
+        let number_of_supers_to_check = 3;
 
         // 1. Calculate our node id, and find our neighborhood in the above layer
         let mut initial_partitions: Vec<_> = vs
@@ -355,17 +361,17 @@ mod tests {
 
     const SIMPLE_HNSW_SIZE: usize = 3;
     fn make_simple_hnsw() -> Hnsw<SIMPLE_HNSW_SIZE, SillyComparator, SillyVec> {
-        let srqt2_recip = std::f32::consts::FRAC_1_SQRT_2;
+        let sqrt2_recip = std::f32::consts::FRAC_1_SQRT_2;
         let data: Vec<SillyVec> = vec![
             [1.0, 0.0, 0.0],
-            [srqt2_recip, srqt2_recip, 0.0],
-            [0.5773, 0.5773, 0.5773],
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
+            [sqrt2_recip, sqrt2_recip, 0.0],
+            [0.5773, 0.5773, 0.5773],
             [-1.0, 0.0, 0.0],
             [0.0, -1.0, 0.0],
             [0.0, 0.0, -1.0],
-            [0.0, srqt2_recip, srqt2_recip],
+            [0.0, sqrt2_recip, sqrt2_recip],
         ];
         let c = SillyComparator { data: data.clone() };
         let vs: Vec<_> = (0..9).map(VectorId).collect();
@@ -376,7 +382,9 @@ mod tests {
     #[test]
     fn test_nearness_search() {
         let hnsw: Hnsw<SIMPLE_HNSW_SIZE, SillyComparator, SillyVec> = make_simple_hnsw();
-        let search_vector = AbstractVector::Unstored(&[0.0, 0.7071, 0.7071]);
+        let sqrt2_recip = std::f32::consts::FRAC_1_SQRT_2;
+        let slice = &[0.0, sqrt2_recip, sqrt2_recip];
+        let search_vector = AbstractVector::Unstored(slice);
         let results = hnsw.search(search_vector, 9);
         assert_eq!(results, vec![])
     }
@@ -395,11 +403,11 @@ mod tests {
                     NodeId(1),
                     NodeId(2),
                     NodeId(18446744073709551615),
+                    NodeId(0),
                     NodeId(2),
-                    NodeId(0),
                     NodeId(18446744073709551615),
-                    NodeId(1),
                     NodeId(0),
+                    NodeId(1),
                     NodeId(18446744073709551615)
                 ]
                 .as_ref()
@@ -427,54 +435,56 @@ mod tests {
             Some(
                 vec![
                     // Node 0
-                    NodeId(1),
-                    NodeId(2),
-                    NodeId(3),
-                    // Node 1
-                    NodeId(2),
-                    NodeId(0),
-                    NodeId(3),
-                    // Node 2
-                    NodeId(1),
-                    NodeId(8),
-                    NodeId(0),
-                    // Node 3
-                    NodeId(1),
-                    NodeId(8),
-                    NodeId(2),
-                    // Node 4
-                    NodeId(8),
-                    NodeId(2),
-                    NodeId(0),
-                    // Node 5
                     NodeId(3),
                     NodeId(4),
+                    NodeId(1),
+                    // Node 1
+                    NodeId(3),
+                    NodeId(8),
+                    NodeId(4),
+                    // Node 2
+                    NodeId(8),
+                    NodeId(4),
+                    NodeId(0),
+                    // Node 3
+                    NodeId(4),
+                    NodeId(0),
+                    NodeId(1),
+                    // Node 4
+                    NodeId(3),
+                    NodeId(8),
+                    NodeId(0),
+                    // Node 5
+                    NodeId(1),
+                    NodeId(2),
                     NodeId(6),
                     // Node 6
                     NodeId(0),
-                    NodeId(4),
+                    NodeId(2),
                     NodeId(5),
                     // Node 7
                     NodeId(0),
                     NodeId(1),
                     NodeId(3),
                     // Node 8
-                    NodeId(2),
-                    NodeId(3),
-                    NodeId(4)
+                    NodeId(4),
+                    NodeId(1),
+                    NodeId(2)
                 ]
                 .as_ref()
             )
         );
     }
 
-    /*
-        #[test]
-        fn test_search() {
-            let hnsw: Hnsw<SIMPLE_HNSW_SIZE, SillyComparator, SillyVec> = make_simple_hnsw();
-            let v = [0.0, 0.7071, 0.7071];
-            let results = hnsw.search(v, 9);
-            assert_eq!(
+    #[test]
+    fn test_search() {
+        let hnsw: Hnsw<SIMPLE_HNSW_SIZE, SillyComparator, SillyVec> = make_simple_hnsw();
+        let data = &hnsw.layers[0].comparator.data;
+        for (i, datum) in data.iter().enumerate() {
+            eprintln!("Searching for VectorId({i})");
+            let v = AbstractVector::Unstored(datum);
+            let results = dbg!(hnsw.search(v, 9));
+            assert_eq!(VectorId(i), results[0].0)
+        }
     }
-        */
 }
