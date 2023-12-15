@@ -51,7 +51,7 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZ
 
     pub fn closest_nodes(&self, v: VectorId, number_of_nodes: usize) -> Vec<(NodeId, f32)> {
         let mut result: Vec<(NodeId, f32)> = Vec::new();
-        let mut visit_queue = vec![NodeId(0)];
+        let mut visit_queue = vec![(NodeId(0), f32::MAX)];
         let mut visited: HashSet<NodeId> = HashSet::new();
         while let Some(next) = visit_queue.pop() {
             visited.insert(next);
@@ -71,8 +71,7 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZ
             visit_queue.extend(
                 neighbor_distances
                     .iter()
-                    .filter(|(_, d)| worst.is_none() || worst.as_ref().unwrap().1 > *d)
-                    .map(|(node, _)| *node),
+                    .filter(|(_, d)| worst.is_none() || worst.as_ref().unwrap().1 > *d),
             );
 
             result.extend(neighbor_distances);
@@ -82,6 +81,7 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZ
             if worst == new_worst {
                 break;
             }
+            visited.sort_by_key(|(_, distance)| OrderedFloat(*distance));
         }
 
         result
@@ -160,6 +160,12 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T: Sync> Hnsw<NEIGHBORHOO
     ) -> Layer<NEIGHBORHOOD_SIZE, C, T> {
         let max = vs.len();
         let number_of_supers_to_check = 1;
+        let mut initial_partitions: Vec<_> = vs.par_iter().map(|id| {
+            let initial_vector_distances =
+                self.initial_vector_distances(*id, level, number_of_supers_to_check);
+            (id, initial_vector_distances)
+        });
+
         let mut all_distances: Vec<_> = vs
             .par_iter()
             .map(|id| {
