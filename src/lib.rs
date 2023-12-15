@@ -184,7 +184,10 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T: Sync> Hnsw<NEIGHBORHOO
         vs: Vec<VectorId>,
         level: usize,
     ) -> Layer<NEIGHBORHOOD_SIZE, C, T> {
+        // Parameter for the number of neighbours to look at from above.
         let number_of_supers_to_check = 1;
+
+        // 1. Calculate our node id, and find our neighborhood in the above layer
         let mut initial_partitions: Vec<_> = vs
             .par_iter()
             .enumerate()
@@ -203,10 +206,14 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T: Sync> Hnsw<NEIGHBORHOO
         initial_partitions.par_sort_unstable_by_key(|(_node_id, _vector_id, distances)| {
             distances.first().map(|(_, d)| OrderedFloat(*d))
         });
+
+        // 2. Partition the layer in terms of the closeness to the
+        // best node in the layer above
         let partition_groups = initial_partitions
             .into_iter()
             .into_group_map_by(|(_, _, distances)| distances.first().map(|(id, _)| *id));
 
+        // 3. Calculate our neighbourhoods by comparing distances in our partition
         let borrowed_comparator = &comparator;
         let mut all_distances: Vec<UnsafeCell<Vec<(NodeId, f32)>>> = partition_groups
             .into_par_iter()
@@ -244,6 +251,7 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T: Sync> Hnsw<NEIGHBORHOO
             })
             .collect();
 
+        // 4. Make neighborhoods bidirectional
         for i in 0..all_distances.len() {
             for (n, d) in unsafe { &*(all_distances[i].get()) } {
                 debug_assert!(n.0 != i);
@@ -254,8 +262,14 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T: Sync> Hnsw<NEIGHBORHOO
             }
         }
 
-        // this neighbors, despite seemingly immutable, is going to be mutated unsafely!
+        // This neighbors array, despite seemingly immutable, is going
+        // to be mutated unsafely! However, each segment is logically
+        // independent and therefore safe.
         let neighbors = vec![NodeId(!0); vs.len() * NEIGHBORHOOD_SIZE];
+
+        // 5. In parallel, write our own best neighbors, in order of
+        // distance, into our neighborhood array truncating to
+        // neighborhood size
         all_distances
             .par_iter_mut()
             .enumerate()
