@@ -1,9 +1,7 @@
-#[macro_use]
-extern crate timeit;
+use std::{cell::UnsafeCell, collections::HashSet, marker::PhantomData};
 
-use std::{cell::UnsafeCell, collections::HashSet, marker::PhantomData, sync::Mutex};
-
-use rand::{rngs::StdRng, thread_rng, Rng, RngCore, SeedableRng};
+use itertools::Itertools;
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use rayon::prelude::*;
 
 #[derive(PartialEq, Eq, Debug, PartialOrd, Ord, Clone, Copy, Hash)]
@@ -37,6 +35,7 @@ pub struct Layer<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> {
 }
 
 impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZE, C, T> {
+    #[allow(unused)]
     fn get_node(&self, v: VectorId) -> Option<NodeId> {
         self.nodes.binary_search(&v).ok().map(NodeId)
     }
@@ -53,7 +52,7 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZ
         let mut result: Vec<(NodeId, f32)> = Vec::new();
         let mut visit_queue = vec![(NodeId(0), f32::MAX)];
         let mut visited: HashSet<NodeId> = HashSet::new();
-        while let Some(next) = visit_queue.pop() {
+        while let Some((next, _)) = visit_queue.pop() {
             visited.insert(next);
             let worst = result.last().cloned();
             let neighbors = self.get_neighbors(next);
@@ -81,7 +80,7 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZ
             if worst == new_worst {
                 break;
             }
-            visited.sort_by_key(|(_, distance)| OrderedFloat(*distance));
+            visit_queue.sort_by_key(|(_, distance)| OrderedFloat(*distance));
         }
 
         result
@@ -158,52 +157,68 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T: Sync> Hnsw<NEIGHBORHOO
         vs: Vec<VectorId>,
         level: usize,
     ) -> Layer<NEIGHBORHOOD_SIZE, C, T> {
-        let max = vs.len();
         let number_of_supers_to_check = 1;
-        let mut initial_partitions: Vec<_> = vs.par_iter().map(|id| {
-            let initial_vector_distances =
-                self.initial_vector_distances(*id, level, number_of_supers_to_check);
-            (id, initial_vector_distances)
-        });
-
-        let mut all_distances: Vec<_> = vs
+        let mut initial_partitions: Vec<_> = vs
             .par_iter()
-            .map(|id| {
+            .enumerate()
+            .map(|(node_id, vector_id)| {
                 let initial_vector_distances =
-                    self.initial_vector_distances(*id, level, number_of_supers_to_check);
-                let number_of_checked_supers = std::cmp::max(0, number_of_supers_to_check);
+                    self.initial_vector_distances(*vector_id, level, number_of_supers_to_check);
+                let initial_node_distances: Vec<_> = initial_vector_distances
+                    .into_iter()
+                    .map(|(vector_id, distance)| {
+                        (NodeId(vs.binary_search(&vector_id).unwrap()), distance)
+                    })
+                    .collect();
+                (NodeId(node_id), *vector_id, initial_node_distances)
+            })
+            .collect();
+        initial_partitions.par_sort_unstable_by_key(|(_node_id, _vector_id, distances)| {
+            distances.first().map(|(_, d)| OrderedFloat(*d))
+        });
+        let partition_groups = initial_partitions
+            .into_iter()
+            .into_group_map_by(|(_, _, distances)| distances.first().map(|(id, _)| *id));
 
-                let number_of_nodes_to_check = std::cmp::min(NEIGHBORHOOD_SIZE * 10, max - 1);
-                let choice_count =
-                    std::cmp::min(number_of_nodes_to_check - number_of_checked_supers, max - 1);
-                let prng = StdRng::seed_from_u64(level as u64 + id.0 as u64 + vs.len() as u64);
+        let borrowed_comparator = &comparator;
+        let mut all_distances: Vec<UnsafeCell<Vec<(NodeId, f32)>>> = partition_groups
+            .into_par_iter()
+            .flat_map(|(_sup, partition)| {
+                let max = partition.len();
+                partition
+                    .par_iter()
+                    .map(|(node_id, vector_id, distances)| {
+                        let mut distances = distances.clone();
+                        // some random, some for neighborhood
+                        // TODO - also some random extra nodes on the same layer
+                        let number_of_nodes_to_check =
+                            std::cmp::min(NEIGHBORHOOD_SIZE * 10, max - 1);
+                        let choice_count =
+                            std::cmp::min(number_of_nodes_to_check - distances.len(), max - 1);
+                        let prng = StdRng::seed_from_u64(
+                            level as u64 + vector_id.0 as u64 + vs.len() as u64,
+                        );
 
-                let choices = choose_n(choice_count, max, id.0, prng);
-                let mut distances =
-                    vec![(!0, f32::MAX); choices.len() + initial_vector_distances.len()];
-                for i in 0..choices.len() {
-                    let choice = choices[i];
-                    let distance = comparator.compare_stored(*id, VectorId(choice));
-                    distances[i] = (choice, distance);
-                }
-                // add also our super nodes
-                for (i, (super_vector, distance)) in
-                    (choices.len()..number_of_nodes_to_check).zip(initial_vector_distances)
-                {
-                    distances[i] = (super_vector.0, distance);
-                }
-                distances.sort_by_key(|d| OrderedFloat(d.1));
-                distances.truncate(NEIGHBORHOOD_SIZE);
-                dbg!(&distances);
-                UnsafeCell::new(distances)
+                        let partition_choices = choose_n(choice_count, max, node_id.0, prng);
+                        for i in 0..partition_choices.len() {
+                            let choice = &partition[partition_choices[i]];
+                            let distance = borrowed_comparator.compare_stored(*vector_id, choice.1);
+                            distances.push((choice.0, distance));
+                        }
+                        distances.sort_by_key(|d| OrderedFloat(d.1));
+                        distances.truncate(NEIGHBORHOOD_SIZE);
+                        dbg!(&distances);
+                        UnsafeCell::new(distances)
+                    })
+                    .collect::<Vec<_>>()
             })
             .collect();
 
         for i in 0..all_distances.len() {
             for (n, d) in unsafe { &*(all_distances[i].get()) } {
-                debug_assert!(*n != i);
-                let other = all_distances[*n].get_mut();
-                other.push((i, *d));
+                debug_assert!(n.0 != i);
+                let other = all_distances[n.0].get_mut();
+                other.push((NodeId(i), *d));
             }
         }
 
@@ -223,7 +238,7 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T: Sync> Hnsw<NEIGHBORHOO
                 let unsafe_neighbors: *mut NodeId = neighbors.as_ptr() as *mut NodeId;
                 (0..distances.len()).for_each(|j| unsafe {
                     let offset = unsafe_neighbors.add(i * NEIGHBORHOOD_SIZE + j);
-                    *offset = NodeId(distances[j].0);
+                    *offset = distances[j].0;
                 });
             });
 
