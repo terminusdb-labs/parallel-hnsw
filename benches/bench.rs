@@ -1,7 +1,7 @@
 #![feature(test)]
 extern crate test;
 
-use parallel_hnsw::{Comparator, Layer, VectorId};
+use parallel_hnsw::{Comparator, Hnsw, Layer, VectorId};
 use rand::{thread_rng, Rng};
 use test::Bencher;
 type SillyVec = [f32; 100];
@@ -56,6 +56,6 @@ fn bla(b: &mut Bencher) {
     let vs: Vec<VectorId> = (0..10000).map(VectorId).collect();
 
     b.iter(|| {
-        let _result: Layer<10, _, _> = Layer::generate(comparator.clone(), vs.clone());
+        let _result: Hnsw<10, _, _> = Hnsw::generate(comparator.clone(), vs.clone());
     });
 }
