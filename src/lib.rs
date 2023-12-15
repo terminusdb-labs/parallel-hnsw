@@ -2,6 +2,7 @@ use std::{cell::UnsafeCell, collections::HashSet, marker::PhantomData};
 
 use itertools::Itertools;
 use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand_distr::{Distribution, Exp};
 use rayon::prelude::*;
 
 #[derive(PartialEq, Eq, Debug, PartialOrd, Ord, Clone, Copy, Hash)]
@@ -222,27 +223,41 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T: Sync> Hnsw<NEIGHBORHOO
         // 3. Calculate our neighbourhoods by comparing distances in our partition
         let borrowed_comparator = &comparator;
         let mut all_distances: Vec<UnsafeCell<Vec<(NodeId, f32)>>> = partition_groups
-            .into_par_iter()
+            .par_iter()
             .flat_map(|(_sup, partition)| {
                 let max = partition.len();
                 partition
                     .par_iter()
                     .map(|(node_id, vector_id, distances)| {
                         let mut distances = distances.clone();
+                        let super_nodes: Vec<_> =
+                            distances.iter().map(|(node, _)| node).cloned().collect();
+
                         // some random, some for neighborhood
                         // TODO - also some random extra nodes on the same layer
                         let number_of_nodes_to_check =
                             std::cmp::min(NEIGHBORHOOD_SIZE * 10, max - 1);
                         let choice_count =
                             std::cmp::min(number_of_nodes_to_check - distances.len(), max - 1);
-                        let prng = StdRng::seed_from_u64(
+                        let mut prng = StdRng::seed_from_u64(
                             level as u64 + vector_id.0 as u64 + vs.len() as u64,
                         );
 
-                        let partition_choices = choose_n(choice_count, max, node_id.0, prng);
+                        let mut partitions: Vec<_> = super_nodes
+                            .into_iter()
+                            .map(|n| &partition_groups[&Some(n)])
+                            .collect();
+                        if partitions.is_empty() {
+                            // probably we're in the top layer. best add ourselves.
+                            partitions.push(partition);
+                        }
+                        let partition_maxes: Vec<_> = partitions.iter().map(|p| p.len()).collect();
+                        let partition_choices =
+                            choose_n(choice_count, partition_maxes, node_id.0, &mut prng);
 
                         for i in 0..partition_choices.len() {
-                            let choice = &partition[partition_choices[i]];
+                            let partition = partitions[partition_choices[i].0];
+                            let choice = &partition[partition_choices[i].1];
                             let distance = borrowed_comparator.compare_vec(
                                 AbstractVector::Stored(*vector_id),
                                 AbstractVector::Stored(choice.1),
@@ -319,12 +334,25 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T: Sync> Hnsw<NEIGHBORHOO
     }
 }
 
-fn choose_n(n: usize, max: usize, exclude: usize, mut prng: StdRng) -> Vec<usize> {
+fn choose_n(
+    n: usize,
+    partition_maxes: Vec<usize>,
+    exclude: usize,
+    prng: &mut StdRng,
+) -> Vec<(usize, usize)> {
+    // todo: probably should give higher chance to select our own partition
     let mut count = 0;
     let mut set = HashSet::with_capacity(n);
+    let exp = Exp::new(1.0_f32).unwrap();
     while count != n {
-        let selection = prng.gen_range(0..max);
-        if selection != exclude && set.insert(selection) {
+        let mut which_partition = exp.sample(prng).floor() as usize;
+        if which_partition >= partition_maxes.len() {
+            which_partition = 0;
+        }
+        let selection = prng.gen_range(0..partition_maxes[which_partition]);
+        if (which_partition != 0 || selection != exclude)
+            && set.insert((which_partition, selection))
+        {
             count += 1;
         }
     }
