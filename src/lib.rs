@@ -59,8 +59,8 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T> Layer<NEIGHBORHOOD_SIZ
             let neighbors = self.get_neighbors(next);
             let neighbor_distances: Vec<_> = neighbors
                 .iter()
-                .enumerate()
-                .filter(|(_ix, n)| !visited.contains(*n))
+                .enumerate() // Remove empty cells and previously visited nodes
+                .filter(|(_ix, n)| n.0 == !0 || !visited.contains(*n))
                 .map(|(ix, n)| {
                     (
                         NodeId(ix),
@@ -107,8 +107,8 @@ pub struct Hnsw<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T: Sync> {
 
 impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T: Sync> Hnsw<NEIGHBORHOOD_SIZE, C, T> {
     pub fn get_layer(&self, i: usize) -> Option<&Layer<NEIGHBORHOOD_SIZE, C, T>> {
-        if self.layers.len() > i {
-            Some(&self.layers[self.layers.len() - i - 1])
+        if self.layer_count() > i {
+            Some(&self.layers[self.layer_count() - i - 1])
         } else {
             None
         }
@@ -128,6 +128,29 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T: Sync> Hnsw<NEIGHBORHOO
             .map(|previous_layer| previous_layer.closest_vectors(v, number_of_nodes))
             .unwrap_or_default()
     }
+
+    pub fn layer_count(&self) -> usize {
+        self.layers.len()
+    }
+
+    /*
+    pub fn search(&self, v: VectorId, number_of_candidates: usize) -> Vec<(VectorId, f32)> {
+        let upper_layer_candidate_count = 1;
+        let mut candidates_queue = Vec::new();
+        for i in 0..self.layer_count() {
+            let candidate_count = if i == self.layer_count() {
+                number_of_candidates
+            } else {
+                upper_layer_candidate_count
+            };
+            let layer = &self.layers[i];
+            let closest = layer.closest_vectors(v, candidate_count);
+            candidates_queue.extend(closest);
+            candidates_queue.sort_by_key(|(_, d)| OrderedFloat(d));
+            candidates_queue.truncate(number_of_candidates);
+        }
+        candidates_queue
+    }*/
 
     pub fn generate_layer(
         &self,
@@ -165,6 +188,7 @@ impl<const NEIGHBORHOOD_SIZE: usize, C: Comparator<T>, T: Sync> Hnsw<NEIGHBORHOO
                 }
                 distances.sort_by_key(|d| OrderedFloat(d.1));
                 distances.truncate(NEIGHBORHOOD_SIZE);
+                dbg!(&distances);
                 UnsafeCell::new(distances)
             })
             .collect();
@@ -259,30 +283,35 @@ mod tests {
         fn compare_unstored(&self, v1: &SillyVec, v2: &SillyVec) -> f32 {
             let mut result = 0.0;
             for (&f1, &f2) in v1.iter().zip(v2.iter()) {
-                result += f1 * f2;
+                result += f1 * f2
             }
-            result
+            1.0 - result
         }
     }
 
-    #[test]
-    fn test_generation() {
+    const SIMPLE_HNSW_SIZE: usize = 3;
+    fn make_simple_hnsw() -> Hnsw<SIMPLE_HNSW_SIZE, SillyComparator, SillyVec> {
         let data: Vec<SillyVec> = vec![
             [1.0, 0.0, 0.0],
+            [0.7071, 0.7071, 0.0],
+            [0.5773, 0.5773, 0.5773],
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
             [-1.0, 0.0, 0.0],
             [0.0, -1.0, 0.0],
             [0.0, 0.0, -1.0],
-            [0.7071, 0.7071, 0.0],
             [0.0, 0.7071, 0.7071],
-            [0.5773, 0.5773, 0.5773],
         ];
         let c = SillyComparator { data: data.clone() };
         let vs: Vec<_> = (0..10).map(VectorId).collect();
-        const SIZE: usize = 3;
 
-        let hnsw: Hnsw<SIZE, SillyComparator, SillyVec> = Hnsw::generate(c, vs);
+        let hnsw: Hnsw<SIMPLE_HNSW_SIZE, SillyComparator, SillyVec> = Hnsw::generate(c, vs);
+        hnsw
+    }
+
+    #[test]
+    fn test_generation() {
+        let hnsw: Hnsw<SIMPLE_HNSW_SIZE, SillyComparator, SillyVec> = make_simple_hnsw();
         assert_eq!(
             hnsw.get_layer(1).map(|layer| &layer.nodes),
             Some(vec![VectorId(0), VectorId(1), VectorId(2)].as_ref())
@@ -294,8 +323,8 @@ mod tests {
                     NodeId(1),
                     NodeId(18446744073709551615),
                     NodeId(18446744073709551615),
-                    NodeId(0),
                     NodeId(2),
+                    NodeId(0),
                     NodeId(18446744073709551615),
                     NodeId(1),
                     NodeId(18446744073709551615),
@@ -304,5 +333,32 @@ mod tests {
                 .as_ref()
             )
         );
+        assert_eq!(
+            hnsw.get_layer(0).map(|layer| &layer.nodes),
+            Some(
+                vec![
+                    VectorId(0),
+                    VectorId(1),
+                    VectorId(2),
+                    VectorId(3),
+                    VectorId(4),
+                    VectorId(5),
+                    VectorId(6),
+                    VectorId(7),
+                    VectorId(8)
+                ]
+                .as_ref()
+            )
+        );
     }
+
+    /*
+        #[test]
+        fn test_search() {
+            let hnsw: Hnsw<SIMPLE_HNSW_SIZE, SillyComparator, SillyVec> = make_simple_hnsw();
+            let v = [0.0, 0.7071, 0.7071];
+            let results = hnsw.search(v, 9);
+            assert_eq!(
+    }
+        */
 }
