@@ -53,6 +53,6 @@ fn bla(b: &mut Bencher) {
     let vs: Vec<VectorId> = (0..10000).map(VectorId).collect();
 
     b.iter(|| {
-        let _result: Hnsw<10, _, _> = Hnsw::generate(comparator.clone(), vs.clone());
+        let _result: Hnsw<10, _, _> = Hnsw::generate(comparator.clone(), vs.clone(), 24, 48);
     });
 }

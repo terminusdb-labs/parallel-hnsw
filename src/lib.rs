@@ -33,6 +33,7 @@ pub struct OrderedFloat(f32);
 
 impl Eq for OrderedFloat {}
 
+#[allow(clippy::derive_ord_xor_partial_ord)]
 impl Ord for OrderedFloat {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.partial_cmp(other).unwrap()
@@ -238,16 +239,18 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                         // some random, some for neighborhood
                         // TODO - also some random extra nodes on the same layer
                         let number_of_nodes_to_check =
-                            std::cmp::min(neighborhood_size * 10, max - 1);
-                        let choice_count =
-                            std::cmp::min(number_of_nodes_to_check - distances.len(), max - 1);
+                            std::cmp::min(neighborhood_size * 10, max.saturating_sub(1));
+                        let choice_count = std::cmp::min(
+                            number_of_nodes_to_check.saturating_sub(distances.len()),
+                            max.saturating_sub(1),
+                        );
                         let mut prng = StdRng::seed_from_u64(
                             level as u64 + vector_id.0 as u64 + vs.len() as u64,
                         );
 
                         let mut partitions: Vec<_> = super_nodes
                             .into_iter()
-                            .map(|n| &partition_groups[&Some(n)])
+                            .filter_map(|n| partition_groups.get(&Some(n)))
                             .collect();
                         if partitions.is_empty() {
                             // probably we're in the top layer. best add ourselves.
@@ -277,10 +280,13 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
         // 4. Make neighborhoods bidirectional
         for i in 0..all_distances.len() {
             for (n, d) in unsafe { &*(all_distances[i].get()) } {
-                debug_assert!(n.0 != i);
-                let other = all_distances[n.0].get_mut();
-                if !other.iter().any(|pair| pair.0 == NodeId(i)) {
-                    other.push((NodeId(i), *d));
+                // Was an assertion, but we're looking in other partitions now
+                // debug_assert!(n.0 != i);
+                if n.0 != i {
+                    let other = all_distances[n.0].get_mut();
+                    if !other.iter().any(|pair| pair.0 == NodeId(i)) {
+                        other.push((NodeId(i), *d));
+                    }
                 }
             }
         }
@@ -326,11 +332,15 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
         zero_layer_neighborhood_size: usize,
     ) -> Self {
         let total_size = vs.len();
+        eprintln!("neighborhood_size: {neighborhood_size}");
+        eprintln!("total_size: {total_size}");
         let layer_count = (total_size as f32).log(neighborhood_size as f32).ceil() as usize;
+        eprintln!("layer count: {layer_count}");
         let layers = Vec::with_capacity(layer_count);
         let mut hnsw: Hnsw<C, T> = Hnsw { layers };
         for i in 0..layer_count {
             let level = layer_count - i - 1;
+            eprintln!("Generating level {level}");
             let layer_size = neighborhood_size.pow(i as u32 + 1);
             let slice_length = std::cmp::min(layer_size, vs.len());
             let slice = &vs[0..slice_length];
@@ -374,6 +384,8 @@ fn choose_n(
 
 #[cfg(test)]
 mod tests {
+
+    use rand_distr::Uniform;
 
     use super::*;
     type SillyVec = [f32; 3];
@@ -419,6 +431,54 @@ mod tests {
         let hnsw: Hnsw<SillyComparator, SillyVec> = Hnsw::generate(c, vs, 3, 6);
         hnsw
     }
+
+    type BigVec = Vec<f32>;
+    #[derive(Clone, Debug, PartialEq)]
+    struct BigComparator {
+        data: Vec<BigVec>,
+    }
+
+    impl Comparator<BigVec> for BigComparator {
+        fn compare_vec(&self, v1: AbstractVector<BigVec>, v2: AbstractVector<BigVec>) -> f32 {
+            let v1 = match v1 {
+                AbstractVector::Stored(i) => &self.data[i.0],
+                AbstractVector::Unstored(v) => v,
+            };
+            let v2 = match v2 {
+                AbstractVector::Stored(i) => &self.data[i.0],
+                AbstractVector::Unstored(v) => v,
+            };
+            let mut result = 0.0;
+            for (&f1, &f2) in v1.iter().zip(v2.iter()) {
+                result += f1 * f2
+            }
+            1.0 - result
+        }
+    }
+
+    fn random_normed_vec(prng: &mut StdRng, size: usize) -> Vec<f32> {
+        let range = Uniform::from(0.0..1.0);
+        let vec: Vec<f32> = prng.sample_iter(&range).take(size).collect();
+        let norm = vec.iter().map(|f| f * f).sum::<f32>().sqrt();
+        let res = vec.iter().map(|f| f / norm).collect();
+        res
+    }
+
+    fn make_random_hnsw(count: usize, dimension: usize) -> Hnsw<BigComparator, BigVec> {
+        let data: Vec<Vec<f32>> = (0..count)
+            .into_par_iter()
+            .map(move |i| {
+                let mut prng = StdRng::seed_from_u64(42_u64 + i as u64);
+                random_normed_vec(&mut prng, dimension)
+            })
+            .collect();
+        let c = BigComparator { data };
+        let vs: Vec<_> = (0..count).map(VectorId).collect();
+
+        let hnsw: Hnsw<BigComparator, BigVec> = Hnsw::generate(c, vs, 24, 48);
+        hnsw
+    }
+
     #[test]
     fn test_nearness_search() {
         let hnsw: Hnsw<SillyComparator, SillyVec> = make_simple_hnsw();
@@ -548,10 +608,31 @@ mod tests {
         let hnsw: Hnsw<SillyComparator, SillyVec> = make_simple_hnsw();
         let data = &hnsw.layers[0].comparator.data;
         for (i, datum) in data.iter().enumerate() {
-            eprintln!("Searching for VectorId({i})");
             let v = AbstractVector::Unstored(datum);
-            let results = dbg!(hnsw.search(v, 9));
+            let results = hnsw.search(v, 9);
             assert_eq!(VectorId(i), results[0].0)
         }
+    }
+
+    #[test]
+    fn test_recall() {
+        let size = 10000;
+        let dimension = 10;
+        let hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
+        let data = &hnsw.layers[0].comparator.data;
+        let total = data.len();
+        let mut total_relevant = 0;
+        for (i, datum) in data.iter().enumerate() {
+            let v = AbstractVector::Unstored(datum);
+            let results = hnsw.search(v, 50);
+            if VectorId(i) == results[0].0 {
+                total_relevant += 1;
+            }
+        }
+        eprintln!("total relevant: {total_relevant}");
+        eprintln!("from total: {total}");
+        let recall = total_relevant as f32 / total as f32;
+        eprintln!("with recall: {recall}");
+        assert!(recall > 0.9)
     }
 }
