@@ -66,16 +66,21 @@ impl<C: Comparator<T>, T> Layer<C, T> {
     pub fn closest_nodes(
         &self,
         v: AbstractVector<T>,
+        candidates: Vec<(NodeId, f32)>,
         number_of_nodes: usize,
     ) -> Vec<(NodeId, f32)> {
-        let mut result: Vec<(NodeId, f32)> = vec![(
-            NodeId(0),
-            self.comparator.compare_vec(
-                v.clone(),
-                AbstractVector::Stored(self.get_vector(NodeId(0))),
-            ),
-        )];
-        let mut visit_queue = vec![(NodeId(0), f32::MAX)];
+        let mut result: Vec<(NodeId, f32)> = if candidates.is_empty() {
+            vec![(
+                NodeId(0),
+                self.comparator.compare_vec(
+                    v.clone(),
+                    AbstractVector::Stored(self.get_vector(NodeId(0))),
+                ),
+            )]
+        } else {
+            candidates
+        };
+        let mut visit_queue = result.clone();
         let mut visited: HashSet<NodeId> = HashSet::new();
         while let Some((next, _)) = visit_queue.pop() {
             visited.insert(next);
@@ -85,11 +90,10 @@ impl<C: Comparator<T>, T> Layer<C, T> {
                 .iter() // Remove empty cells and previously visited nodes
                 .filter(|n| n.0 != !0 && !visited.contains(*n))
                 .map(|n| {
-                    (
-                        *n,
-                        self.comparator
-                            .compare_vec(v.clone(), AbstractVector::Stored(self.get_vector(*n))),
-                    )
+                    let distance = self
+                        .comparator
+                        .compare_vec(v.clone(), AbstractVector::Stored(self.get_vector(*n)));
+                    (*n, distance)
                 })
                 .collect();
             visited.extend(neighbor_distances.iter().map(|(n, _)| n));
@@ -101,6 +105,11 @@ impl<C: Comparator<T>, T> Layer<C, T> {
 
             result.extend(neighbor_distances);
             result.sort_by_key(|(_, distance)| OrderedFloat(*distance));
+            // eprintln!("number of nodes {number_of_nodes}");
+            // eprintln!("previous worst: {worst:?}");
+            // eprintln!("worst result {:?}", result.last().cloned());
+            // eprintln!("new result: {result:?}");
+
             result.truncate(number_of_nodes);
 
             if result.len() == number_of_nodes && worst == result.last().cloned() {
@@ -108,24 +117,25 @@ impl<C: Comparator<T>, T> Layer<C, T> {
             }
             visit_queue.sort_by_key(|(_, distance)| OrderedFloat(*distance));
         }
-
+        // eprintln!("final result: {result:?}");
         result
     }
 
     pub fn closest_vectors(
         &self,
         v: AbstractVector<T>,
+        candidates: Vec<(VectorId, f32)>,
         number_of_vectors: usize,
     ) -> Vec<(VectorId, f32)> {
-        self.closest_nodes(v, number_of_vectors)
+        let candidate_nodes: Vec<_> = candidates
+            .into_iter()
+            // We should only be proceeding downwards!
+            .map(|(v, d)| (self.get_node(v).unwrap(), d))
+            .collect();
+        self.closest_nodes(v, candidate_nodes, number_of_vectors)
             .iter()
             .map(|(node_id, distance)| (self.get_vector(*node_id), *distance))
             .collect()
-    }
-
-    pub fn closest_vector(&self, v: AbstractVector<T>) -> (VectorId, f32) {
-        let (node_id, distance) = self.closest_nodes(v, 1)[0];
-        (self.get_vector(node_id), distance)
     }
 }
 
@@ -136,26 +146,39 @@ pub struct Hnsw<C: Comparator<T>, T: Sync> {
 
 impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
     pub fn get_layer(&self, i: usize) -> Option<&Layer<C, T>> {
-        if self.layer_count() > i {
-            Some(&self.layers[self.layer_count() - i - 1])
+        self.get_layer_from_top(self.layers.len() - i - 1)
+    }
+
+    pub fn get_layer_from_top(&self, i: usize) -> Option<&Layer<C, T>> {
+        if i < self.layer_count() {
+            Some(&self.layers[i])
         } else {
+            eprintln!("No layer");
             None
         }
     }
 
     pub fn get_layer_above(&self, i: usize) -> Option<&Layer<C, T>> {
-        self.get_layer(i + 1)
+        if i == 0 {
+            None
+        } else {
+            self.get_layer_from_top(i - 1)
+        }
     }
 
     pub fn initial_vector_distances(
         &self,
         v: VectorId,
-        level: usize,
+        level_from_top: usize,
         number_of_nodes: usize,
     ) -> Vec<(VectorId, f32)> {
-        self.get_layer_above(level)
+        self.get_layer_above(level_from_top)
             .map(|previous_layer| {
-                previous_layer.closest_vectors(AbstractVector::Stored(v), number_of_nodes)
+                previous_layer
+                    .closest_vectors(AbstractVector::Stored(v), vec![], number_of_nodes)
+                    .into_iter()
+                    .filter(|(w, _)| v != *w)
+                    .collect()
             })
             .unwrap_or_default()
     }
@@ -178,9 +201,10 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                 upper_layer_candidate_count
             };
             let layer = &self.layers[i];
-            let closest = layer.closest_vectors(v.clone(), candidate_count);
+            let closest =
+                layer.closest_vectors(v.clone(), candidates_queue.clone(), candidate_count);
             candidates_queue.extend(closest);
-            candidates_queue.sort_by_key(|(_, d)| OrderedFloat(*d));
+            candidates_queue.sort_by_key(|(v, d)| (OrderedFloat(*d), *v));
             candidates_queue.dedup();
             candidates_queue.truncate(number_of_candidates);
         }
@@ -191,19 +215,22 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
         &self,
         comparator: C,
         vs: Vec<VectorId>,
-        level: usize,
+        level_from_top: usize,
         neighborhood_size: usize,
     ) -> Layer<C, T> {
-        // Parameter for the number of neighbours to look at from above.
-        let number_of_supers_to_check = 3;
+        // Parameter for the number of neighbours to look at from the proceeding layer.
+        let number_of_supers_to_check = 5; // neighborhood_size;
 
         // 1. Calculate our node id, and find our neighborhood in the above layer
         let mut initial_partitions: Vec<_> = vs
             .par_iter()
             .enumerate()
             .map(|(node_id, vector_id)| {
-                let initial_vector_distances =
-                    self.initial_vector_distances(*vector_id, level, number_of_supers_to_check);
+                let initial_vector_distances = self.initial_vector_distances(
+                    *vector_id,
+                    level_from_top,
+                    number_of_supers_to_check,
+                );
                 let initial_node_distances: Vec<_> = initial_vector_distances
                     .into_iter()
                     .map(|(vector_id, distance)| {
@@ -225,12 +252,12 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
 
         // 3. Calculate our neighbourhoods by comparing distances in our partition
         let borrowed_comparator = &comparator;
-        let mut all_distances: Vec<UnsafeCell<Vec<(NodeId, f32)>>> = partition_groups
-            .par_iter()
+        let mut all_distances: Vec<(NodeId, UnsafeCell<Vec<(NodeId, f32)>>)> = partition_groups
+            .iter()
             .flat_map(|(_sup, partition)| {
                 let max = partition.len();
                 partition
-                    .par_iter()
+                    .iter()
                     .map(|(node_id, vector_id, distances)| {
                         let mut distances = distances.clone();
                         let super_nodes: Vec<_> =
@@ -245,7 +272,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                             max.saturating_sub(1),
                         );
                         let mut prng = StdRng::seed_from_u64(
-                            level as u64 + vector_id.0 as u64 + vs.len() as u64,
+                            level_from_top as u64 + vector_id.0 as u64 + vs.len() as u64,
                         );
 
                         let mut partitions: Vec<_> = super_nodes
@@ -270,23 +297,39 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                             distances.push((choice.0, distance));
                         }
                         distances.sort_by_key(|d| (OrderedFloat(d.1), d.0));
-                        distances.truncate(neighborhood_size);
-                        UnsafeCell::new(distances)
+                        distances.dedup();
+                        let distances: Vec<_> = distances
+                            .into_iter()
+                            .filter(|(n, _d)| node_id != n)
+                            .take(neighborhood_size)
+                            .collect();
+                        //                        eprintln!("distances@vec {vector_id:?}: {distances:?}");
+                        (*node_id, UnsafeCell::new(distances))
                     })
                     .collect::<Vec<_>>()
             })
             .collect();
 
         // 4. Make neighborhoods bidirectional
+        all_distances.par_sort_unstable_by_key(|(node_id, _distances)| *node_id);
+        //eprintln!("all_distances: {all_distances:?}");
+        let mut all_distances: Vec<UnsafeCell<Vec<(NodeId, f32)>>> = all_distances
+            .into_iter()
+            .enumerate()
+            .map(|(i, (node_id, distance))| {
+                assert!(i == node_id.0);
+                distance
+            })
+            .collect();
+        //eprintln!("all_distances: {all_distances:?}");
         for i in 0..all_distances.len() {
-            for (n, d) in unsafe { &*(all_distances[i].get()) } {
+            for (n, d) in unsafe { &*all_distances[i].get() } {
                 // Was an assertion, but we're looking in other partitions now
-                // debug_assert!(n.0 != i);
-                if n.0 != i {
-                    let other = all_distances[n.0].get_mut();
-                    if !other.iter().any(|pair| pair.0 == NodeId(i)) {
-                        other.push((NodeId(i), *d));
-                    }
+                //eprintln!("i: {:?}, n.0: {}, d: {}", i, n.0, d);
+                debug_assert!(n.0 != i);
+                let other = all_distances[n.0].get_mut();
+                if !other.iter().any(|pair| pair.0 == NodeId(i)) {
+                    other.push((NodeId(i), *d));
                 }
             }
         }
@@ -305,7 +348,9 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
             .for_each(|(i, distances)| {
                 let distances = distances.get_mut();
                 distances.sort_by_key(|d| (OrderedFloat(d.1), d.0));
+                distances.dedup();
                 distances.truncate(neighborhood_size);
+                // eprintln!("distances for {i}: {distances:?}");
                 // We know we have a unique index here that is not
                 // going to be contended. Therefore we just use
                 // unsafe.
@@ -349,7 +394,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
             } else {
                 neighborhood_size
             };
-            let layer = hnsw.generate_layer(c.clone(), slice.to_vec(), level, neighbors);
+            let layer = hnsw.generate_layer(c.clone(), slice.to_vec(), i, neighbors);
             hnsw.layers.push(layer)
         }
 
@@ -415,15 +460,15 @@ mod tests {
     fn make_simple_hnsw() -> Hnsw<SillyComparator, SillyVec> {
         let sqrt2_recip = std::f32::consts::FRAC_1_SQRT_2;
         let data: Vec<SillyVec> = vec![
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-            [sqrt2_recip, sqrt2_recip, 0.0],
-            [0.5773, 0.5773, 0.5773],
-            [-1.0, 0.0, 0.0],
-            [0.0, -1.0, 0.0],
-            [0.0, 0.0, -1.0],
-            [0.0, sqrt2_recip, sqrt2_recip],
+            [1.0, 0.0, 0.0],                 // 0
+            [0.0, 1.0, 0.0],                 // 1
+            [0.0, 0.0, 1.0],                 // 2
+            [sqrt2_recip, sqrt2_recip, 0.0], // 3
+            [0.5773, 0.5773, 0.5773],        // 4
+            [-1.0, 0.0, 0.0],                // 5
+            [0.0, -1.0, 0.0],                // 6
+            [0.0, 0.0, -1.0],                // 7
+            [0.0, sqrt2_recip, sqrt2_recip], // 8
         ];
         let c = SillyComparator { data: data.clone() };
         let vs: Vec<_> = (0..9).map(VectorId).collect();
@@ -559,44 +604,44 @@ mod tests {
                     NodeId(4),
                     NodeId(0),
                     NodeId(1),
-                    NodeId(8),
                     NodeId(2),
-                    NodeId(7),
+                    NodeId(6),
+                    NodeId(18446744073709551615),
                     // Node 4
                     NodeId(3),
-                    NodeId(8),
                     NodeId(0),
                     NodeId(1),
                     NodeId(2),
                     NodeId(5),
+                    NodeId(7),
                     // Node 5
                     NodeId(1),
                     NodeId(2),
-                    NodeId(6),
-                    NodeId(7),
-                    NodeId(8),
                     NodeId(4),
+                    NodeId(0),
+                    NodeId(18446744073709551615),
+                    NodeId(18446744073709551615),
                     // Node 6
                     NodeId(0),
                     NodeId(2),
-                    NodeId(5),
                     NodeId(7),
-                    NodeId(4),
                     NodeId(3),
+                    NodeId(8),
+                    NodeId(1),
                     // Node 7
                     NodeId(0),
                     NodeId(1),
-                    NodeId(3),
-                    NodeId(5),
                     NodeId(6),
                     NodeId(4),
+                    NodeId(2),
+                    NodeId(18446744073709551615),
                     // Node 8
-                    NodeId(4),
                     NodeId(1),
                     NodeId(2),
-                    NodeId(3),
                     NodeId(0),
-                    NodeId(5)
+                    NodeId(6),
+                    NodeId(18446744073709551615),
+                    NodeId(18446744073709551615)
                 ]
                 .as_ref()
             )
@@ -627,12 +672,14 @@ mod tests {
             let results = hnsw.search(v, 50);
             if VectorId(i) == results[0].0 {
                 total_relevant += 1;
+            } else {
+                eprintln!("vector: {i} and result: {:?}", results[0].0);
             }
         }
         eprintln!("total relevant: {total_relevant}");
         eprintln!("from total: {total}");
         let recall = total_relevant as f32 / total as f32;
         eprintln!("with recall: {recall}");
-        assert!(recall > 0.9)
+        assert!(recall > 0.90)
     }
 }
