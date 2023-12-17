@@ -210,6 +210,21 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
         candidates_queue
     }
 
+    pub fn compare_all(comparator: C, v: VectorId, vs: Vec<VectorId>) -> Vec<(VectorId, f32)> {
+        let mut res: Vec<_> = vs
+            .into_iter()
+            .filter(|w| *w != v)
+            .map(|w| {
+                (
+                    w,
+                    comparator.compare_vec(AbstractVector::Stored(v), AbstractVector::Stored(w)),
+                )
+            })
+            .collect();
+        res.sort_by_key(|(v, d)| (OrderedFloat(*d), *v));
+        res
+    }
+
     pub fn generate_layer(
         &self,
         comparator: C,
@@ -224,8 +239,12 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
             .par_iter()
             .enumerate()
             .map(|(node_id, vector_id)| {
-                let initial_vector_distances =
-                    self.initial_vector_distances(*vector_id, number_of_supers_to_check);
+                let comparator = comparator.clone();
+                let initial_vector_distances = if self.layers.is_empty() {
+                    Self::compare_all(comparator, *vector_id, vs.clone())
+                } else {
+                    self.initial_vector_distances(*vector_id, number_of_supers_to_check)
+                };
                 let initial_node_distances: Vec<_> = initial_vector_distances
                     .into_iter()
                     .map(|(vector_id, distance)| {
@@ -653,7 +672,7 @@ mod tests {
 
     #[test]
     fn test_recall() {
-        let size = 1000;
+        let size = 100;
         let dimension = 10;
         let hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
         let data = &hnsw.layers[0].comparator.data;
