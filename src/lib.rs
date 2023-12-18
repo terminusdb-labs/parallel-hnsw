@@ -652,44 +652,44 @@ mod tests {
                     NodeId(4),
                     NodeId(0),
                     NodeId(1),
+                    NodeId(8),
                     NodeId(2),
-                    NodeId(6),
-                    NodeId(18446744073709551615),
+                    NodeId(7),
                     // Node 4
                     NodeId(3),
+                    NodeId(8),
                     NodeId(0),
                     NodeId(1),
                     NodeId(2),
                     NodeId(5),
-                    NodeId(7),
                     // Node 5
                     NodeId(1),
                     NodeId(2),
+                    NodeId(6),
+                    NodeId(7),
+                    NodeId(8),
                     NodeId(4),
-                    NodeId(0),
-                    NodeId(18446744073709551615),
-                    NodeId(18446744073709551615),
                     // Node 6
                     NodeId(0),
                     NodeId(2),
+                    NodeId(5),
                     NodeId(7),
+                    NodeId(4),
                     NodeId(3),
-                    NodeId(8),
-                    NodeId(1),
                     // Node 7
                     NodeId(0),
                     NodeId(1),
+                    NodeId(3),
+                    NodeId(5),
                     NodeId(6),
                     NodeId(4),
-                    NodeId(2),
-                    NodeId(18446744073709551615),
                     // Node 8
+                    NodeId(4),
                     NodeId(1),
                     NodeId(2),
+                    NodeId(3),
                     NodeId(0),
-                    NodeId(6),
-                    NodeId(18446744073709551615),
-                    NodeId(18446744073709551615)
+                    NodeId(5)
                 ]
                 .as_ref()
             )
