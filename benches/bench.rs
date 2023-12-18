@@ -1,7 +1,7 @@
 #![feature(test)]
 extern crate test;
 
-use parallel_hnsw::{AbstractVector, Comparator, Hnsw, Layer, VectorId};
+use parallel_hnsw::{AbstractVector, Comparator, Hnsw, VectorId};
 use rand::{thread_rng, Rng};
 use test::Bencher;
 type SillyVec = [f32; 100];
@@ -31,17 +31,17 @@ impl Comparator<SillyVec> for SillyComparator {
 fn generate_random_vector() -> SillyVec {
     let mut rng = thread_rng();
 
-    let mut foo: SillyVec = [0.0; 100];
-    for i in 0..foo.len() {
-        foo[i] = rng.gen();
-    }
+    let mut result: SillyVec = [0.0; 100];
+    (0..result.len()).for_each(|i| {
+        result[i] = rng.gen();
+    });
 
-    foo
+    result
 }
 
-fn create_test_data() -> SillyComparator {
+fn create_test_data(length: usize) -> SillyComparator {
     let mut vec = Vec::new();
-    for _ in 0..10000 {
+    for _ in 0..length {
         vec.push(generate_random_vector());
     }
     SillyComparator { data: vec }
@@ -49,10 +49,11 @@ fn create_test_data() -> SillyComparator {
 
 #[bench]
 fn bla(b: &mut Bencher) {
-    let comparator = create_test_data();
-    let vs: Vec<VectorId> = (0..10000).map(VectorId).collect();
+    const LENGTH: usize = 10000;
+    let comparator = create_test_data(LENGTH);
+    let vs: Vec<VectorId> = (0..LENGTH).map(VectorId).collect();
 
     b.iter(|| {
-        let _result: Hnsw<10, _, _> = Hnsw::generate(comparator.clone(), vs.clone(), 24, 48);
+        let _result: Hnsw<_, _> = Hnsw::generate(comparator.clone(), vs.clone(), 24, 48);
     });
 }
