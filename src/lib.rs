@@ -618,11 +618,11 @@ pub enum AllVectorIterator<'a> {
 }
 
 impl<'a> Iterator for AllVectorIterator<'a> {
-    type Item = &'a VectorId;
+    type Item = VectorId;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            AllVectorIterator::Full { iter } => iter.next(),
+            AllVectorIterator::Full { iter } => iter.next().cloned(),
             AllVectorIterator::Empty => None,
         }
     }
