@@ -1,13 +1,15 @@
 #![feature(test)]
 extern crate test;
 
+use std::sync::Arc;
+
 use parallel_hnsw::{AbstractVector, Comparator, Hnsw, VectorId};
 use rand::{thread_rng, Rng};
 use test::Bencher;
 type SillyVec = [f32; 100];
 #[derive(Clone)]
 struct SillyComparator {
-    data: Vec<SillyVec>,
+    data: Arc<Vec<SillyVec>>,
 }
 
 impl Comparator<SillyVec> for SillyComparator {
@@ -44,7 +46,9 @@ fn create_test_data(length: usize) -> SillyComparator {
     for _ in 0..length {
         vec.push(generate_random_vector());
     }
-    SillyComparator { data: vec }
+    SillyComparator {
+        data: Arc::new(vec),
+    }
 }
 
 #[bench]
