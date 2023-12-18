@@ -1,9 +1,21 @@
-use std::{cell::UnsafeCell, collections::HashSet, marker::PhantomData};
+use std::{
+    collections::HashSet,
+    fs::OpenOptions,
+    io,
+    marker::PhantomData,
+    mem,
+    path::{Path, PathBuf},
+    slice,
+};
+
+use thiserror::Error;
 
 use itertools::Itertools;
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 use rand_distr::{Distribution, Exp};
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
+use std::io::{Read, Write};
 
 #[derive(PartialEq, Eq, Debug, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct VectorId(pub usize);
@@ -24,8 +36,18 @@ impl<'a, T> Clone for AbstractVector<'a, T> {
     }
 }
 
+#[derive(Error, Debug)]
+pub enum SerializationError {
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    #[error(transparent)]
+    Serde(#[from] serde_json::Error),
+}
+
 pub trait Comparator<T>: Sync + Clone {
     fn compare_vec(&self, v1: AbstractVector<T>, v2: AbstractVector<T>) -> f32;
+    fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError>;
+    fn deserialize<P: AsRef<Path>>(path: P) -> Result<Self, SerializationError>;
 }
 
 #[derive(PartialEq, PartialOrd, Clone, Copy, Debug)]
@@ -429,6 +451,163 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
 
         hnsw
     }
+
+    pub fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
+        let mut hnsw_meta: PathBuf = path.as_ref().into();
+        hnsw_meta.push("meta");
+        let mut hnsw_meta_file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(hnsw_meta)?;
+        let layer_count = self.layer_count();
+
+        let serialized = serde_json::to_string(&HNSWMeta { layer_count })?;
+        hnsw_meta_file.write_all(serialized.as_bytes())?;
+
+        if layer_count > 0 {
+            let mut hnsw_comparator: PathBuf = path.as_ref().into();
+            hnsw_comparator.push("comparator");
+            self.layers[0].comparator.serialize(hnsw_comparator)?;
+        }
+
+        let layer_count = self.layer_count();
+
+        for i in 0..layer_count {
+            let layer = &self.layers[i];
+            // Write meta data
+            let mut hnsw_layer_meta: PathBuf = path.as_ref().into();
+            hnsw_layer_meta.push(format!("layer.meta.{i}"));
+            let mut hnsw_layer_meta_file: std::fs::File = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .open(hnsw_layer_meta)?;
+            let neighborhood_size = layer.neighborhood_size;
+            let node_count = layer.nodes.len();
+            let layer_meta = serde_json::to_string(&LayerMeta {
+                node_count,
+                neighborhood_size,
+            })?;
+            hnsw_layer_meta_file.write_all(&layer_meta.into_bytes())?;
+
+            // Write Nodes
+            let mut hnsw_layer_nodes: PathBuf = path.as_ref().into();
+            hnsw_layer_nodes.push(format!("layer.nodes.{i}"));
+            let mut hnsw_layer_nodes_file: std::fs::File = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .open(hnsw_layer_nodes)?;
+            let node_slice_u8: &[u8] = unsafe {
+                let nodes: &[VectorId] = &layer.nodes;
+                let ptr = nodes.as_ptr() as *const u8;
+                let size = layer.nodes.len() * mem::size_of::<VectorId>();
+                slice::from_raw_parts(ptr, size)
+            };
+            hnsw_layer_nodes_file.write_all(node_slice_u8)?;
+
+            // Write Neighbors
+            let mut hnsw_layer_neighbors: PathBuf = path.as_ref().into();
+            hnsw_layer_neighbors.push(format!("layer.neighbors.{i}"));
+            let mut hnsw_layer_neighbors_file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .open(hnsw_layer_neighbors)?;
+            let neighbor_slice_u8: &[u8] = unsafe {
+                let neighbors: &[NodeId] = &layer.neighbors;
+                let ptr = neighbors.as_ptr() as *const u8;
+                let size = layer.neighbors.len() * mem::size_of::<NodeId>();
+                slice::from_raw_parts(ptr, size)
+            };
+            hnsw_layer_neighbors_file.write_all(neighbor_slice_u8)?;
+        }
+        Ok(())
+    }
+
+    pub fn deserialize<P: AsRef<Path>>(path: P) -> Result<Option<Self>, SerializationError> {
+        let mut hnsw_meta: PathBuf = path.as_ref().into();
+        hnsw_meta.push("meta");
+        let mut hnsw_meta_file = OpenOptions::new().read(true).open(hnsw_meta)?;
+        let mut contents = String::new();
+        hnsw_meta_file.read_to_string(&mut contents)?;
+        let HNSWMeta { layer_count }: HNSWMeta = serde_json::from_str(&contents)?;
+
+        let mut hnsw_comparator_path: PathBuf = path.as_ref().into();
+        hnsw_comparator_path.push("comparator");
+
+        // If we don't have a comparator, the HNSW is empty
+        if hnsw_comparator_path.exists() {
+            let comparator: C = Comparator::deserialize(&hnsw_comparator_path)?;
+            let mut layers = Vec::new();
+            for i in 0..layer_count {
+                // Read meta database_
+                let mut hnsw_layer_meta: PathBuf = path.as_ref().into();
+                hnsw_layer_meta.push(format!("layer.meta.{i}"));
+                let mut hnsw_layer_meta_file: std::fs::File =
+                    OpenOptions::new().read(true).open(hnsw_layer_meta)?;
+                let mut contents = String::new();
+                hnsw_layer_meta_file.read_to_string(&mut contents)?;
+                let LayerMeta {
+                    node_count,
+                    neighborhood_size,
+                } = serde_json::from_str(&contents)?;
+
+                let mut hnsw_layer_nodes: PathBuf = path.as_ref().into();
+                hnsw_layer_nodes.push(format!("layer.nodes.{i}"));
+                let mut hnsw_layer_nodes_file: std::fs::File =
+                    OpenOptions::new().read(true).open(hnsw_layer_nodes)?;
+                let mut nodes: Vec<VectorId> = Vec::with_capacity(node_count);
+                #[allow(clippy::uninit_vec)]
+                unsafe {
+                    nodes.set_len(node_count);
+                }
+                let size = node_count * mem::size_of::<VectorId>();
+                let node_slice_u8: &mut [u8] = unsafe {
+                    let nodes: &mut [VectorId] = &mut nodes;
+                    let ptr = nodes.as_mut_ptr() as *mut u8;
+                    slice::from_raw_parts_mut(ptr, size)
+                };
+                hnsw_layer_nodes_file.read_exact(node_slice_u8)?;
+
+                let mut hnsw_layer_neighbors: PathBuf = path.as_ref().into();
+                hnsw_layer_neighbors.push("layer.neighbors.{i}");
+                let mut hnsw_layer_neighbors_file: std::fs::File =
+                    OpenOptions::new().read(true).open(hnsw_layer_neighbors)?;
+                let mut neighbors: Vec<NodeId> = Vec::with_capacity(node_count * neighborhood_size);
+                #[allow(clippy::uninit_vec)]
+                unsafe {
+                    neighbors.set_len(node_count * neighborhood_size);
+                }
+                let neighbor_slice_u8: &mut [u8] = unsafe {
+                    let neighbors: &mut [NodeId] = &mut neighbors;
+                    let ptr = neighbors.as_mut_ptr() as *mut u8;
+                    let size = (node_count * neighborhood_size) * mem::size_of::<NodeId>();
+                    slice::from_raw_parts_mut(ptr, size)
+                };
+                hnsw_layer_neighbors_file.read_exact(neighbor_slice_u8)?;
+
+                layers.push(Layer {
+                    comparator: comparator.clone(),
+                    neighborhood_size,
+                    neighbors,
+                    nodes,
+                    _phantom: PhantomData,
+                });
+            }
+            Ok(Some(Hnsw { layers }))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct LayerMeta {
+    node_count: usize,
+    neighborhood_size: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct HNSWMeta {
+    layer_count: usize,
 }
 
 fn choose_n_1(
@@ -512,6 +691,14 @@ mod tests {
             }
             1.0 - result
         }
+
+        fn serialize<P: AsRef<Path>>(&self, _path: P) -> Result<(), SerializationError> {
+            Ok(())
+        }
+
+        fn deserialize<P: AsRef<Path>>(_path: P) -> Result<SillyComparator, SerializationError> {
+            Ok(SillyComparator { data: Vec::new() })
+        }
     }
 
     fn make_simple_hnsw() -> Hnsw<SillyComparator, SillyVec> {
@@ -555,6 +742,14 @@ mod tests {
                 result += f1 * f2
             }
             1.0 - result
+        }
+
+        fn serialize<P: AsRef<Path>>(&self, _path: P) -> Result<(), SerializationError> {
+            Ok(())
+        }
+
+        fn deserialize<P: AsRef<Path>>(_path: P) -> Result<BigComparator, SerializationError> {
+            Ok(BigComparator { data: Vec::new() })
         }
     }
 
