@@ -601,13 +601,13 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LayerMeta {
-    node_count: usize,
-    neighborhood_size: usize,
+    pub node_count: usize,
+    pub neighborhood_size: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct HNSWMeta {
-    layer_count: usize,
+    pub layer_count: usize,
 }
 
 fn choose_n_1(
