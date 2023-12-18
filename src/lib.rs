@@ -1,7 +1,7 @@
 use std::{cell::UnsafeCell, collections::HashSet, marker::PhantomData};
 
 use itertools::Itertools;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 use rand_distr::{Distribution, Exp};
 use rayon::prelude::*;
 
@@ -422,6 +422,30 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
     }
 }
 
+fn choose_n_1(
+    n: usize,
+    partition_maxes: Vec<usize>,
+    exclude: usize,
+    prng: &mut StdRng,
+) -> Vec<(usize, usize)> {
+    let mut result: Vec<(usize, usize)> = (0..partition_maxes.len())
+        .flat_map(|partition| {
+            (0..partition_maxes[partition]).filter_map(move |in_partition| {
+                if partition == 0 && in_partition == exclude {
+                    None
+                } else {
+                    Some((partition, in_partition))
+                }
+            })
+        })
+        .collect();
+    result.shuffle(prng);
+
+    result.truncate(n);
+
+    result
+}
+
 fn choose_n(
     n: usize,
     partition_maxes: Vec<usize>,
@@ -429,6 +453,10 @@ fn choose_n(
     prng: &mut StdRng,
 ) -> Vec<(usize, usize)> {
     // todo: probably should give higher chance to select our own partition
+    if partition_maxes.iter().sum::<usize>() * 2 > n {
+        return choose_n_1(n, partition_maxes, exclude, prng);
+    }
+
     let mut count = 0;
     let mut set = HashSet::with_capacity(n);
     let exp = Exp::new(1.0_f32).unwrap();
