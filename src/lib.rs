@@ -72,7 +72,7 @@ impl<C: Comparator<T>, T> Layer<C, T> {
         assert!(!candidates.is_empty());
         let mut visit_queue = candidates.clone();
         visit_queue.reverse();
-        let mut result = candidates.clone();
+        let mut result = candidates;
         let mut visited: HashSet<NodeId> = HashSet::new();
         eprintln!("------------------------------------");
         eprintln!("Initial visit queue: {visit_queue:?}");
@@ -112,8 +112,8 @@ impl<C: Comparator<T>, T> Layer<C, T> {
             if result.len() == number_of_nodes && worst == result.last().cloned() {
                 break;
             }
-            visit_queue.sort_by_key(|(_, distance)| OrderedFloat(*distance));
-            visit_queue.reverse()
+            // Sort in reverse order
+            visit_queue.sort_by_key(|(_, distance)| OrderedFloat(-*distance))
         }
         // eprintln!("final result: {result:?}");
         result
@@ -122,13 +122,13 @@ impl<C: Comparator<T>, T> Layer<C, T> {
     pub fn closest_vectors(
         &self,
         v: AbstractVector<T>,
-        candidates: Vec<(VectorId, f32)>,
+        candidates: &[(VectorId, f32)],
         number_of_vectors: usize,
     ) -> Vec<(VectorId, f32)> {
         let candidate_nodes: Vec<_> = candidates
-            .into_iter()
+            .iter()
             // We should only be proceeding downwards!
-            .map(|(v, d)| (self.get_node(v).unwrap(), d))
+            .map(|(v, d)| (self.get_node(*v).unwrap(), *d))
             .collect();
         self.closest_nodes(v, candidate_nodes, number_of_vectors)
             .iter()
@@ -207,8 +207,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                 upper_layer_candidate_count
             };
             let layer = &self.layers[i];
-            let closest =
-                layer.closest_vectors(v.clone(), candidates_queue.clone(), candidate_count);
+            let closest = layer.closest_vectors(v.clone(), &candidates_queue, candidate_count);
             candidates_queue.extend(closest);
             candidates_queue.sort_by_key(|(v, d)| (OrderedFloat(*d), *v));
             candidates_queue.dedup();
@@ -274,22 +273,21 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
 
         // 3. Calculate our neighbourhoods by comparing distances in our partition
         let borrowed_comparator = &comparator;
-        let mut all_distances: Vec<(NodeId, UnsafeCell<Vec<(NodeId, f32)>>)> = partition_groups
+
+        type Distances = UnsafeCell<Vec<(NodeId, f32)>>;
+        let mut all_distances: Vec<(NodeId, Distances)> = partition_groups
             .par_iter()
             .flat_map(|(_sup, partition)| {
-                let max = partition.len();
                 partition
                     .par_iter()
                     .map(|(node_id, vector_id, distances)| {
+                        eprintln!("Calculating for partition on {vector_id:?}");
                         let mut distances = distances.clone();
                         let super_nodes: Vec<_> =
                             distances.iter().map(|(node, _)| node).cloned().collect();
 
                         // some random, some for neighborhood
                         // TODO - also some random extra nodes on the same layer
-                        let number_of_nodes_to_check =
-                            std::cmp::min(neighborhood_size * 10, max.saturating_sub(1));
-                        let choice_count = number_of_nodes_to_check.saturating_sub(distances.len());
                         let mut prng = StdRng::seed_from_u64(
                             self.layer_count() as u64 + vector_id.0 as u64 + vs.len() as u64,
                         );
@@ -303,6 +301,9 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                             partitions.push(partition);
                         }
                         let partition_maxes: Vec<_> = partitions.iter().map(|p| p.len()).collect();
+
+                        let choice_count =
+                            std::cmp::min(neighborhood_size, partition_maxes.iter().sum());
                         let partition_choices =
                             choose_n(choice_count, partition_maxes, node_id.0, &mut prng);
 
@@ -322,7 +323,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                             .filter(|(n, _d)| node_id != n)
                             .take(neighborhood_size)
                             .collect();
-                        //eprintln!("distances@vec {vector_id:?}: {distances:?}");
+                        eprintln!("distances@vec {vector_id:?}: {distances:?}");
                         (*node_id, UnsafeCell::new(distances))
                     })
                     .collect::<Vec<_>>()
@@ -680,37 +681,39 @@ mod tests {
 
     #[test]
     fn test_recall() {
-        let size = 1000;
+        let size = 280;
         let dimension = 10;
         let hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
         let data = &hnsw.layers[0].comparator.data;
         let total = data.len();
         let mut total_relevant = 0;
         for (i, datum) in data.iter().enumerate() {
+            eprintln!("XXXXXXXXXXXXXXXXXXXXXX");
+            eprintln!("Searching for {i}");
             let v = AbstractVector::Unstored(datum);
-            let results = hnsw.search(v, 50);
+            let results = hnsw.search(v, 100);
             if VectorId(i) == results[0].0 {
                 total_relevant += 1;
             } else {
                 let layer = hnsw.get_layer(0).unwrap();
                 let neighborhood = layer.get_neighbors(NodeId(i));
                 eprintln!(
-                    "vector: {i} and result: {:?} with result queue: {results:?} having neighborhood: {neighborhood:?}",
-                    results[0].0
+                    "Searching for vector: {i} with result: {:?} and result queue: {results:?} having neighborhood: {neighborhood:?}",
+                    results[0].0 .0
                 );
                 let neighborhood = layer.get_neighbors(NodeId(results[0].0 .0));
                 eprintln!(
                     "And we have neighborhood {:?} as: {neighborhood:?}",
-                    results[0].0
+                    results[0].0 .0
                 );
                 let neighborhood = layer.get_neighbors(NodeId(i));
-                //panic!("And we have neighborhood {i} as: {neighborhood:?}");
+                panic!("And we have neighborhood {i} as: {neighborhood:?}");
             }
         }
         eprintln!("total relevant: {total_relevant}");
         eprintln!("from total: {total}");
         let recall = total_relevant as f32 / total as f32;
         eprintln!("with recall: {recall}");
-        assert!(recall > 0.99)
+        assert!(recall >= 1.0)
     }
 }
