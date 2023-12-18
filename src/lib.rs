@@ -274,7 +274,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
         // 3. Calculate our neighbourhoods by comparing distances in our partition
         let borrowed_comparator = &comparator;
 
-        type Distances = UnsafeCell<Vec<(NodeId, f32)>>;
+        type Distances = Vec<(NodeId, f32)>;
         let mut all_distances: Vec<(NodeId, Distances)> = partition_groups
             .par_iter()
             .flat_map(|(_sup, partition)| {
@@ -324,7 +324,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                             .take(neighborhood_size)
                             .collect();
                         // eprintln!("distances@vec {vector_id:?}: {distances:?}");
-                        (*node_id, UnsafeCell::new(distances))
+                        (*node_id, distances)
                     })
                     .collect::<Vec<_>>()
             })
@@ -333,7 +333,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
         // 4. Make neighborhoods bidirectional
         all_distances.par_sort_unstable_by_key(|(node_id, _distances)| *node_id);
         //eprintln!("all_distances: {all_distances:?}");
-        let mut all_distances: Vec<UnsafeCell<Vec<(NodeId, f32)>>> = all_distances
+        let mut all_distances: Vec<Vec<(NodeId, f32)>> = all_distances
             .into_iter()
             .enumerate()
             .map(|(i, (node_id, distance))| {
@@ -341,18 +341,21 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                 distance
             })
             .collect();
-        //eprintln!("all_distances: {all_distances:?}");
-        for i in 0..all_distances.len() {
-            for (n, d) in unsafe { &*all_distances[i].get() } {
-                // Was an assertion, but we're looking in other partitions now
-                //eprintln!("i: {:?}, n.0: {}, d: {}", i, n.0, d);
-                debug_assert!(n.0 != i);
-                let other = all_distances[n.0].get_mut();
-                if !other.iter().any(|pair| pair.0 == NodeId(i)) {
-                    other.push((NodeId(i), *d));
-                }
-            }
-        }
+
+        let mut neighbor_candidates: Vec<_> = all_distances
+            .par_iter()
+            .enumerate()
+            .flat_map(|(node, distances)| {
+                let node = NodeId(node);
+                distances
+                    .par_iter()
+                    .map(move |(neighbor, distance)| (*neighbor, node, OrderedFloat(*distance)))
+            })
+            .collect();
+        neighbor_candidates.par_sort_unstable();
+        let neighbor_of_neighbor_partitions = neighbor_candidates
+            .into_iter()
+            .into_group_map_by(|(node, _, _)| *node);
 
         // This neighbors array, despite seemingly immutable, is going
         // to be mutated unsafely! However, each segment is logically
@@ -366,7 +369,13 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
             .par_iter_mut()
             .enumerate()
             .for_each(|(i, distances)| {
-                let distances = distances.get_mut();
+                if let Some(neighbors) = neighbor_of_neighbor_partitions.get(&NodeId(i)) {
+                    distances.extend(
+                        neighbors
+                            .iter()
+                            .map(|(_, node, distance)| (*node, distance.0)),
+                    );
+                }
                 distances.sort_by_key(|d| (OrderedFloat(d.1), d.0));
                 distances.dedup();
                 distances.truncate(neighborhood_size);
