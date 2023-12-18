@@ -5,7 +5,7 @@ use std::{
     marker::PhantomData,
     mem,
     path::{Path, PathBuf},
-    slice,
+    slice::{self, Iter},
 };
 
 use thiserror::Error;
@@ -156,6 +156,10 @@ impl<C: Comparator<T>, T> Layer<C, T> {
             .iter()
             .map(|(node_id, distance)| (self.get_vector(*node_id), *distance))
             .collect()
+    }
+
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
     }
 }
 
@@ -595,6 +599,31 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
             Ok(Some(Hnsw { layers }))
         } else {
             Ok(None)
+        }
+    }
+
+    pub fn all_vectors(&self) -> AllVectorIterator {
+        self.get_layer(0)
+            .map(|layer| {
+                let iter = layer.nodes.iter();
+                AllVectorIterator::Full { iter }
+            })
+            .unwrap_or(AllVectorIterator::Empty)
+    }
+}
+
+pub enum AllVectorIterator<'a> {
+    Full { iter: Iter<'a, VectorId> },
+    Empty,
+}
+
+impl<'a> Iterator for AllVectorIterator<'a> {
+    type Item = &'a VectorId;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            AllVectorIterator::Full { iter } => iter.next(),
+            AllVectorIterator::Empty => None,
         }
     }
 }
