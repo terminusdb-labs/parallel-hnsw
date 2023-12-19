@@ -5,6 +5,7 @@ use std::{
     marker::PhantomData,
     mem,
     path::{Path, PathBuf},
+    ptr,
     slice::{self, Iter},
 };
 
@@ -308,75 +309,68 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
         // 3. Calculate our neighbourhoods by comparing distances in our partition
         let borrowed_comparator = &comparator;
 
-        let mut all_distances: Vec<(NodeId, Distances)> = partition_groups
-            .par_iter()
-            .flat_map(|(_sup, partition)| {
-                partition
-                    .par_iter()
-                    .map(|(node_id, vector_id, distances)| {
-                        // eprintln!("Calculating for partition on {vector_id:?}");
-                        let mut distances = distances.clone();
-                        let super_nodes: Vec<_> =
-                            distances.iter().map(|(node, _)| node).cloned().collect();
+        let mut all_distances: Vec<Distances> = Vec::with_capacity(vs.len());
+        #[allow(clippy::uninit_vec)]
+        unsafe {
+            all_distances.set_len(vs.len());
+        }
+        partition_groups.par_iter().for_each(|(_sup, partition)| {
+            partition
+                .par_iter()
+                .for_each(|(node_id, vector_id, distances)| {
+                    let mut distances = distances.clone();
+                    let super_nodes: Vec<_> =
+                        distances.iter().map(|(node, _)| node).cloned().collect();
 
-                        // some random, some for neighborhood
-                        // TODO - also some random extra nodes on the same layer
-                        let mut prng = StdRng::seed_from_u64(
-                            self.layer_count() as u64 + vector_id.0 as u64 + vs.len() as u64,
+                    // some random, some for neighborhood
+                    // TODO - also some random extra nodes on the same layer
+                    let mut prng = StdRng::seed_from_u64(
+                        self.layer_count() as u64 + vector_id.0 as u64 + vs.len() as u64,
+                    );
+
+                    let mut partitions: Vec<_> = super_nodes
+                        .into_iter()
+                        .filter_map(|n| partition_groups.get(&Some(n)))
+                        .collect();
+                    if partitions.is_empty() {
+                        // probably we're in the top layer. best add ourselves.
+                        partitions.push(partition);
+                    }
+                    let partition_maxes: Vec<_> = partitions.iter().map(|p| p.len()).collect();
+
+                    let choice_count =
+                        std::cmp::min(neighborhood_size * 10, partition_maxes.iter().sum());
+                    let partition_choices =
+                        choose_n(choice_count, partition_maxes, node_id.0, &mut prng);
+
+                    for i in 0..partition_choices.len() {
+                        let partition = partitions[partition_choices[i].0];
+                        let choice = &partition[partition_choices[i].1];
+                        let distance = borrowed_comparator.compare_vec(
+                            AbstractVector::Stored(*vector_id),
+                            AbstractVector::Stored(choice.1),
                         );
+                        distances.push((choice.0, distance));
+                    }
+                    distances.sort_by_key(|d| (OrderedFloat(d.1), d.0));
+                    distances.dedup();
+                    let distances: Vec<_> = distances
+                        .into_iter()
+                        .filter(|(n, _d)| node_id != n)
+                        .take(neighborhood_size)
+                        .collect();
+                    // eprintln!("distances@vec {vector_id:?}: {distances:?}");
+                    let unsafe_distances: *mut Distances = all_distances.as_ptr() as *mut Distances;
+                    unsafe {
+                        let offset = unsafe_distances.add(node_id.0);
 
-                        let mut partitions: Vec<_> = super_nodes
-                            .into_iter()
-                            .filter_map(|n| partition_groups.get(&Some(n)))
-                            .collect();
-                        if partitions.is_empty() {
-                            // probably we're in the top layer. best add ourselves.
-                            partitions.push(partition);
-                        }
-                        let partition_maxes: Vec<_> = partitions.iter().map(|p| p.len()).collect();
-
-                        let choice_count =
-                            std::cmp::min(neighborhood_size * 10, partition_maxes.iter().sum());
-                        let partition_choices =
-                            choose_n(choice_count, partition_maxes, node_id.0, &mut prng);
-
-                        for i in 0..partition_choices.len() {
-                            let partition = partitions[partition_choices[i].0];
-                            let choice = &partition[partition_choices[i].1];
-                            let distance = borrowed_comparator.compare_vec(
-                                AbstractVector::Stored(*vector_id),
-                                AbstractVector::Stored(choice.1),
-                            );
-                            distances.push((choice.0, distance));
-                        }
-                        distances.sort_by_key(|d| (OrderedFloat(d.1), d.0));
-                        distances.dedup();
-                        let distances: Vec<_> = distances
-                            .into_iter()
-                            .filter(|(n, _d)| node_id != n)
-                            .take(neighborhood_size)
-                            .collect();
-                        // eprintln!("distances@vec {vector_id:?}: {distances:?}");
-                        (*node_id, distances)
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect();
+                        ptr::write(offset, distances);
+                    }
+                });
+        });
 
         // 4. Make neighborhoods bidirectional
-        all_distances.par_sort_unstable_by_key(|(node_id, _distances)| *node_id);
-        //eprintln!("all_distances: {all_distances:?}");
-        let mut all_distances_by_index: Vec<Distances> = Vec::with_capacity(vs.len());
-        all_distances
-            .into_par_iter()
-            .enumerate()
-            .map(|(i, (node_id, distance))| {
-                assert!(i == node_id.0);
-                distance
-            })
-            .collect_into_vec(&mut all_distances_by_index);
-
-        let mut neighbor_candidates: Vec<_> = all_distances_by_index
+        let mut neighbor_candidates: Vec<_> = all_distances
             .par_iter()
             .enumerate()
             .flat_map(|(node, distances)| {
@@ -399,7 +393,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
         // 5. In parallel, write our own best neighbors, in order of
         // distance, into our neighborhood array truncating to
         // neighborhood size
-        all_distances_by_index
+        all_distances
             .par_iter_mut()
             .enumerate()
             .for_each(|(i, distances)| {
