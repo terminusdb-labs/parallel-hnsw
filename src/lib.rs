@@ -366,17 +366,17 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
         // 4. Make neighborhoods bidirectional
         all_distances.par_sort_unstable_by_key(|(node_id, _distances)| *node_id);
         //eprintln!("all_distances: {all_distances:?}");
-        //let all_distances: Vec<Vec<(NodeId, f32)>> = Vec::with_capacity(vs.len());
-        let mut all_distances: Vec<Vec<(NodeId, f32)>> = all_distances
-            .into_iter()
+        let mut all_distances_by_index: Vec<Distances> = Vec::with_capacity(vs.len());
+        all_distances
+            .into_par_iter()
             .enumerate()
             .map(|(i, (node_id, distance))| {
                 assert!(i == node_id.0);
                 distance
             })
-            .collect();
+            .collect_into_vec(&mut all_distances_by_index);
 
-        let mut neighbor_candidates: Vec<_> = all_distances
+        let mut neighbor_candidates: Vec<_> = all_distances_by_index
             .par_iter()
             .enumerate()
             .flat_map(|(node, distances)| {
@@ -399,7 +399,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
         // 5. In parallel, write our own best neighbors, in order of
         // distance, into our neighborhood array truncating to
         // neighborhood size
-        all_distances
+        all_distances_by_index
             .par_iter_mut()
             .enumerate()
             .for_each(|(i, distances)| {
