@@ -13,6 +13,7 @@ struct SillyComparator {
 }
 
 impl Comparator<SillyVec> for SillyComparator {
+    type Params = ();
     fn compare_vec(&self, v1: AbstractVector<SillyVec>, v2: AbstractVector<SillyVec>) -> f32 {
         let v1 = match v1 {
             AbstractVector::Stored(i) => &self.data[i.0],
@@ -27,6 +28,18 @@ impl Comparator<SillyVec> for SillyComparator {
             result += f1 * f2
         }
         1.0 - result
+    }
+    fn deserialize<P: AsRef<std::path::Path>>(
+        _path: P,
+        _params: Self::Params,
+    ) -> Result<Self, parallel_hnsw::SerializationError> {
+        todo!();
+    }
+    fn serialize<P: AsRef<std::path::Path>>(
+        &self,
+        _path: P,
+    ) -> Result<(), parallel_hnsw::SerializationError> {
+        todo!();
     }
 }
 
