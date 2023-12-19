@@ -1001,12 +1001,4 @@ mod tests {
         eprintln!("with recall: {recall}");
         assert!(recall >= 0.999)
     }
-
-    #[test]
-    fn test_all_vector_par() {
-        let v: Vec<VectorId> = (0..1000).map(VectorId).collect();
-        let vi = AllVectorIterator::Full { iter: v.iter() };
-        let res: Vec<_> = vi.par_bridge().map(|i| eprintln!("{i:?}")).collect();
-        panic!("{res:?}");
-    }
 }
