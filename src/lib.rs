@@ -45,9 +45,13 @@ pub enum SerializationError {
 }
 
 pub trait Comparator<T>: Sync + Clone {
+    type Params;
     fn compare_vec(&self, v1: AbstractVector<T>, v2: AbstractVector<T>) -> f32;
     fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError>;
-    fn deserialize<P: AsRef<Path>>(path: P) -> Result<Self, SerializationError>;
+    fn deserialize<P: AsRef<Path>>(
+        path: P,
+        params: Self::Params,
+    ) -> Result<Self, SerializationError>;
 }
 
 #[derive(PartialEq, PartialOrd, Clone, Copy, Debug)]
@@ -526,7 +530,10 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
         Ok(())
     }
 
-    pub fn deserialize<P: AsRef<Path>>(path: P) -> Result<Option<Self>, SerializationError> {
+    pub fn deserialize<P: AsRef<Path>>(
+        path: P,
+        params: C::Params,
+    ) -> Result<Option<Self>, SerializationError> {
         let mut hnsw_meta: PathBuf = path.as_ref().into();
         hnsw_meta.push("meta");
         let mut hnsw_meta_file = OpenOptions::new().read(true).open(hnsw_meta)?;
@@ -539,7 +546,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
 
         // If we don't have a comparator, the HNSW is empty
         if hnsw_comparator_path.exists() {
-            let comparator: C = Comparator::deserialize(&hnsw_comparator_path)?;
+            let comparator: C = Comparator::deserialize(&hnsw_comparator_path, params)?;
             let mut layers = Vec::new();
             for i in 0..layer_count {
                 // Read meta database_
@@ -705,6 +712,7 @@ mod tests {
     }
 
     impl Comparator<SillyVec> for SillyComparator {
+        type Params = ();
         fn compare_vec(&self, v1: AbstractVector<SillyVec>, v2: AbstractVector<SillyVec>) -> f32 {
             let v1 = match v1 {
                 AbstractVector::Stored(i) => &self.data[i.0],
@@ -725,7 +733,10 @@ mod tests {
             Ok(())
         }
 
-        fn deserialize<P: AsRef<Path>>(_path: P) -> Result<SillyComparator, SerializationError> {
+        fn deserialize<P: AsRef<Path>>(
+            _path: P,
+            _: (),
+        ) -> Result<SillyComparator, SerializationError> {
             Ok(SillyComparator { data: Vec::new() })
         }
     }
@@ -757,6 +768,7 @@ mod tests {
     }
 
     impl Comparator<BigVec> for BigComparator {
+        type Params = ();
         fn compare_vec(&self, v1: AbstractVector<BigVec>, v2: AbstractVector<BigVec>) -> f32 {
             let v1 = match v1 {
                 AbstractVector::Stored(i) => &self.data[i.0],
@@ -777,7 +789,10 @@ mod tests {
             Ok(())
         }
 
-        fn deserialize<P: AsRef<Path>>(_path: P) -> Result<BigComparator, SerializationError> {
+        fn deserialize<P: AsRef<Path>>(
+            _path: P,
+            _: (),
+        ) -> Result<BigComparator, SerializationError> {
             Ok(BigComparator { data: Vec::new() })
         }
     }
@@ -976,5 +991,13 @@ mod tests {
         let recall = total_relevant as f32 / total as f32;
         eprintln!("with recall: {recall}");
         assert!(recall >= 0.999)
+    }
+
+    #[test]
+    fn test_all_vector_par() {
+        let v: Vec<VectorId> = (0..1000).map(VectorId).collect();
+        let vi = AllVectorIterator::Full { iter: v.iter() };
+        let res: Vec<_> = vi.par_bridge().map(|i| eprintln!("{i:?}")).collect();
+        panic!("{res:?}");
     }
 }
