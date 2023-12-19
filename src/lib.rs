@@ -461,9 +461,10 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
     }
 
     pub fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
+        std::fs::create_dir_all(&path)?;
         let mut hnsw_meta: PathBuf = path.as_ref().into();
         hnsw_meta.push("meta");
-        eprintln!("hnsw serialization path: {:?}", path.as_ref().to_str());
+        eprintln!("hnsw serialization path: {hnsw_meta:?}");
         let mut hnsw_meta_file = OpenOptions::new()
             .write(true)
             .create(true)
