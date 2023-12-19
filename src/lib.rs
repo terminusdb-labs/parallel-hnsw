@@ -229,7 +229,8 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                     .compare_vec(v.clone(), AbstractVector::Stored(entry_vector))
             })
             .unwrap_or(0.0);
-        let mut candidates_queue = vec![(entry_vector, distance_from_entry)];
+        let mut candidates_queue = Vec::with_capacity(2 * number_of_candidates);
+        candidates_queue.push((entry_vector, distance_from_entry));
         for i in 0..self.layer_count() {
             let candidate_count = if i == self.layer_count() - 1 {
                 number_of_candidates
@@ -558,7 +559,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
         // If we don't have a comparator, the HNSW is empty
         if hnsw_comparator_path.exists() {
             let comparator: C = Comparator::deserialize(&hnsw_comparator_path, params)?;
-            let mut layers = Vec::new();
+            let mut layers = Vec::with_capacity(layer_count);
             for i in 0..layer_count {
                 // Read meta database_
                 let mut hnsw_layer_meta: PathBuf = path.as_ref().into();
