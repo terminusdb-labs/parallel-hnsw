@@ -269,12 +269,14 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
         vs: Vec<VectorId>,
         neighborhood_size: usize,
     ) -> Layer<C, T> {
+        type Distances = Vec<(NodeId, f32)>;
         // Parameter for the number of neighbours to look at from the proceeding layer.
         let number_of_supers_to_check = 5; // neighborhood_size;
 
         // 1. Calculate our node id, and find our neighborhood in the above layer
-        let mut initial_partitions: Vec<_> = vs
-            .par_iter()
+        let mut initial_partitions: Vec<(NodeId, VectorId, Distances)> =
+            Vec::with_capacity(vs.len());
+        vs.par_iter()
             .enumerate()
             .map(|(node_id, vector_id)| {
                 let comparator = comparator.clone();
@@ -291,7 +293,8 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                     .collect();
                 (NodeId(node_id), *vector_id, initial_node_distances)
             })
-            .collect();
+            .collect_into_vec(&mut initial_partitions);
+
         initial_partitions.par_sort_unstable_by_key(|(_node_id, _vector_id, distances)| {
             distances.first().map(|(_, d)| OrderedFloat(*d))
         });
@@ -305,7 +308,6 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
         // 3. Calculate our neighbourhoods by comparing distances in our partition
         let borrowed_comparator = &comparator;
 
-        type Distances = Vec<(NodeId, f32)>;
         let mut all_distances: Vec<(NodeId, Distances)> = partition_groups
             .par_iter()
             .flat_map(|(_sup, partition)| {
@@ -364,6 +366,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
         // 4. Make neighborhoods bidirectional
         all_distances.par_sort_unstable_by_key(|(node_id, _distances)| *node_id);
         //eprintln!("all_distances: {all_distances:?}");
+        //let all_distances: Vec<Vec<(NodeId, f32)>> = Vec::with_capacity(vs.len());
         let mut all_distances: Vec<Vec<(NodeId, f32)>> = all_distances
             .into_iter()
             .enumerate()
