@@ -463,14 +463,18 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
     pub fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
         let mut hnsw_meta: PathBuf = path.as_ref().into();
         hnsw_meta.push("meta");
+        eprintln!("hnsw serialization path: {:?}", path.as_ref().to_str());
         let mut hnsw_meta_file = OpenOptions::new()
             .write(true)
             .create(true)
             .open(hnsw_meta)?;
+        eprintln!("opened hnsw file");
         let layer_count = self.layer_count();
 
         let serialized = serde_json::to_string(&HNSWMeta { layer_count })?;
+        eprintln!("serialized data");
         hnsw_meta_file.write_all(serialized.as_bytes())?;
+        eprintln!("serialized to file");
 
         if layer_count > 0 {
             let mut hnsw_comparator: PathBuf = path.as_ref().into();
@@ -488,7 +492,8 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
             let mut hnsw_layer_meta_file: std::fs::File = OpenOptions::new()
                 .write(true)
                 .create(true)
-                .open(hnsw_layer_meta)?;
+                .open(&hnsw_layer_meta)?;
+            eprintln!("opened {hnsw_layer_meta:?} for layer {i}");
             let neighborhood_size = layer.neighborhood_size;
             let node_count = layer.nodes.len();
             let layer_meta = serde_json::to_string(&LayerMeta {
@@ -496,6 +501,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                 neighborhood_size,
             })?;
             hnsw_layer_meta_file.write_all(&layer_meta.into_bytes())?;
+            eprintln!("wrote meta for layer {i}");
 
             // Write Nodes
             let mut hnsw_layer_nodes: PathBuf = path.as_ref().into();
@@ -503,7 +509,8 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
             let mut hnsw_layer_nodes_file: std::fs::File = OpenOptions::new()
                 .write(true)
                 .create(true)
-                .open(hnsw_layer_nodes)?;
+                .open(&hnsw_layer_nodes)?;
+            eprintln!("opened {hnsw_layer_nodes:?} for layer {i}");
             let node_slice_u8: &[u8] = unsafe {
                 let nodes: &[VectorId] = &layer.nodes;
                 let ptr = nodes.as_ptr() as *const u8;
@@ -511,6 +518,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                 slice::from_raw_parts(ptr, size)
             };
             hnsw_layer_nodes_file.write_all(node_slice_u8)?;
+            eprintln!("wrote nodes for layer {i}");
 
             // Write Neighbors
             let mut hnsw_layer_neighbors: PathBuf = path.as_ref().into();
@@ -518,7 +526,8 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
             let mut hnsw_layer_neighbors_file = OpenOptions::new()
                 .write(true)
                 .create(true)
-                .open(hnsw_layer_neighbors)?;
+                .open(&hnsw_layer_neighbors)?;
+            eprintln!("opened {hnsw_layer_neighbors_file:?} for layer {i}");
             let neighbor_slice_u8: &[u8] = unsafe {
                 let neighbors: &[NodeId] = &layer.neighbors;
                 let ptr = neighbors.as_ptr() as *const u8;
@@ -526,6 +535,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                 slice::from_raw_parts(ptr, size)
             };
             hnsw_layer_neighbors_file.write_all(neighbor_slice_u8)?;
+            eprintln!("wrote neighbors for layer {i}");
         }
         Ok(())
     }
