@@ -7,6 +7,7 @@ use std::{
     path::{Path, PathBuf},
     ptr,
     slice::{self, Iter},
+    sync::atomic::{self, AtomicUsize},
 };
 
 use thiserror::Error;
@@ -75,6 +76,8 @@ pub struct Layer<C: Comparator<T>, T> {
     neighbors: Vec<NodeId>,
     _phantom: PhantomData<T>,
 }
+
+unsafe impl<C: Comparator<T>, T> Sync for Layer<C, T> {}
 
 impl<C: Comparator<T>, T> Layer<C, T> {
     #[allow(unused)]
@@ -166,6 +169,89 @@ impl<C: Comparator<T>, T> Layer<C, T> {
     pub fn node_count(&self) -> usize {
         self.nodes.len()
     }
+
+    fn node_distances(&self, supers: &[VectorId]) -> Vec<NodeDistance> {
+        let mut visit_queue = Vec::with_capacity(supers.len());
+        visit_queue.extend(supers.iter().map(|s| self.get_node(*s).unwrap()));
+
+        let mut result: Vec<AtomicNodeDistance> = Vec::with_capacity(self.node_count());
+        for _ in 0..self.node_count() {
+            result.push(AtomicNodeDistance::new());
+        }
+        for n in visit_queue.iter() {
+            let AtomicNodeDistance { index_sum, .. } = &result[n.0];
+            index_sum.store(0, atomic::Ordering::Relaxed);
+        }
+
+        let mut generation = 0;
+        loop {
+            visit_queue = visit_queue
+                .into_par_iter()
+                .flat_map(|node| {
+                    let AtomicNodeDistance {
+                        hops,
+                        index_sum: distance,
+                    } = &result[node.0];
+                    if hops
+                        .compare_exchange(
+                            usize::MAX,
+                            generation,
+                            atomic::Ordering::Relaxed,
+                            atomic::Ordering::Relaxed,
+                        )
+                        .is_ok()
+                    {
+                        let neighbors = self.get_neighbors(node);
+                        for (ix, neighbor) in neighbors.iter().enumerate() {
+                            let total_distance = distance.load(atomic::Ordering::Relaxed) + ix + 1;
+                            let AtomicNodeDistance { index_sum, .. } = &result[neighbor.0];
+                            index_sum
+                                .fetch_update(
+                                    atomic::Ordering::Relaxed,
+                                    atomic::Ordering::Relaxed,
+                                    |current| Some(usize::min(current, total_distance)),
+                                )
+                                .unwrap();
+                        }
+
+                        rayon::iter::Either::Left(neighbors.into_par_iter().cloned())
+                    } else {
+                        rayon::iter::Either::Right(rayon::iter::empty())
+                    }
+                })
+                .collect();
+
+            if visit_queue.is_empty() {
+                break;
+            }
+            generation += 1;
+        }
+
+        result.into_iter().map(|r| r.finalize()).collect()
+    }
+}
+
+struct AtomicNodeDistance {
+    hops: AtomicUsize,
+    index_sum: AtomicUsize,
+}
+
+impl AtomicNodeDistance {
+    fn new() -> Self {
+        Self {
+            hops: AtomicUsize::new(usize::MAX),
+            index_sum: AtomicUsize::new(usize::MAX),
+        }
+    }
+
+    fn finalize(self) -> NodeDistance {
+        unsafe { std::mem::transmute(self) }
+    }
+}
+
+pub struct NodeDistance {
+    pub hops: usize,
+    pub index_sum: usize,
 }
 
 #[derive(PartialEq, PartialOrd, Debug)]
@@ -633,6 +719,16 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                 AllVectorIterator::Full { iter }
             })
             .unwrap_or(AllVectorIterator::Empty)
+    }
+
+    pub fn node_distances_for_layer(&self, layer_id: usize) -> Vec<NodeDistance> {
+        let layer = self.get_layer(layer_id).unwrap();
+        let vectors = if layer_id == 0 {
+            &[]
+        } else {
+            &self.get_layer(layer_id - 1).unwrap().nodes[..]
+        };
+        layer.node_distances(vectors)
     }
 }
 
