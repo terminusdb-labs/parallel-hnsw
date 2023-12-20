@@ -722,11 +722,11 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
     }
 
     pub fn node_distances_for_layer(&self, layer_id: usize) -> Vec<NodeDistance> {
-        let layer = self.get_layer(layer_id).unwrap();
+        let layer = self.get_layer_from_top(layer_id).unwrap();
         let vectors = if layer_id == 0 {
             &[]
         } else {
-            &self.get_layer(layer_id - 1).unwrap().nodes[..]
+            &self.get_layer_from_top(layer_id - 1).unwrap().nodes[..]
         };
         layer.node_distances(vectors)
     }
