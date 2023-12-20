@@ -2,8 +2,10 @@ use std::{
     collections::HashSet,
     fs::OpenOptions,
     io,
+    iter::{Cloned, TakeWhile},
     marker::PhantomData,
     mem,
+    os::unix::thread::JoinHandleExt,
     path::{Path, PathBuf},
     ptr,
     slice::{self, Iter},
@@ -146,10 +148,10 @@ impl<C: Comparator<T>, T> Layer<C, T> {
         result
     }
 
-    pub fn closest_vectors(
-        &self,
+    pub fn closest_vectors<'a, 'b>(
+        &'a self,
         v: AbstractVector<T>,
-        candidates: &[(VectorId, f32)],
+        candidates: FixedPriorityQueue<VectorId>,
         number_of_vectors: usize,
     ) -> Vec<(VectorId, f32)> {
         let candidate_nodes: Vec<_> = candidates
@@ -160,7 +162,7 @@ impl<C: Comparator<T>, T> Layer<C, T> {
         self.closest_nodes(v, candidate_nodes, number_of_vectors)
             .iter()
             .map(|(node_id, distance)| (self.get_vector(*node_id), *distance))
-            .collect()
+            .collect::<Vec<_>>()
     }
 
     pub fn node_count(&self) -> usize {
@@ -215,6 +217,22 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
             .collect::<Vec<_>>()
     }
 
+    pub fn entry_candidates(&self, v: &AbstractVector<T>, size: usize) -> Vec<(VectorId, f32)> {
+        let entry_vector = self.entry_vector();
+        let distance_from_entry = self
+            .layers
+            .first()
+            .map(|l| {
+                l.comparator
+                    .compare_vec(v.clone(), AbstractVector::Stored(entry_vector))
+            })
+            .unwrap_or(0.0);
+        let mut vec = Vec::with_capacity(size);
+        vec.push((entry_vector, distance_from_entry));
+        (1..size).for_each(|_| vec.push((VectorId::empty(), f32::MAX)));
+        vec
+    }
+
     pub fn layer_count(&self) -> usize {
         self.layers.len()
     }
@@ -225,17 +243,8 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
         number_of_candidates: usize,
     ) -> Vec<(VectorId, f32)> {
         let upper_layer_candidate_count = 1;
-        let entry_vector = self.entry_vector();
-        let distance_from_entry = self
-            .layers
-            .first()
-            .map(|l| {
-                l.comparator
-                    .compare_vec(v.clone(), AbstractVector::Stored(entry_vector))
-            })
-            .unwrap_or(0.0);
-        let mut candidates_queue = Vec::with_capacity(2 * number_of_candidates);
-        candidates_queue.push((entry_vector, distance_from_entry));
+        let mut candidates_queue_vec = self.entry_candidates(&v, number_of_candidates);
+        let mut candidates_queue = FixedPriorityQueue::new(&mut candidates_queue_vec);
         for i in 0..self.layer_count() {
             let candidate_count = if i == self.layer_count() - 1 {
                 number_of_candidates
@@ -243,14 +252,10 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                 upper_layer_candidate_count
             };
             let layer = &self.layers[i];
-            let closest = layer.closest_vectors(v.clone(), &candidates_queue, candidate_count);
-            candidates_queue.extend(closest);
-            candidates_queue.sort_by_key(|(v, d)| (OrderedFloat(*d), *v));
-            candidates_queue.dedup();
-            // eprintln!("candidates_queue: {candidates_queue:?}");
-            candidates_queue.truncate(number_of_candidates);
+            let result = layer.closest_vectors(v.clone(), candidates_queue.copy(), candidate_count);
+            candidates_queue.merge(&result);
         }
-        candidates_queue
+        candidates_queue_vec
     }
 
     pub fn compare_all(comparator: C, v: VectorId, vs: Vec<VectorId>) -> Vec<(VectorId, f32)> {
@@ -716,6 +721,121 @@ fn choose_n(
     set.into_iter().collect()
 }
 
+trait Identifier {
+    fn is_empty(&self) -> bool;
+    fn empty() -> Self;
+}
+
+impl Identifier for NodeId {
+    fn is_empty(&self) -> bool {
+        self.0 == !0
+    }
+
+    fn empty() -> Self {
+        NodeId(!0)
+    }
+}
+
+impl Identifier for VectorId {
+    fn is_empty(&self) -> bool {
+        self.0 == !0
+    }
+
+    fn empty() -> Self {
+        VectorId(!0)
+    }
+}
+
+#[derive(Debug, Copy)]
+struct FixedPriorityQueue<'a, Id: Identifier + Copy> {
+    slice: &'a mut [(Id, f32)],
+}
+
+impl<'a, Id: Identifier + Copy> FixedPriorityQueue<'a, Id> {
+    pub fn new(slice: &'a mut [(Id, f32)]) -> Self {
+        FixedPriorityQueue { slice }
+    }
+
+    pub fn insert(&mut self, idx: usize, elt: (Id, f32)) {
+        let len = self.slice.len();
+        for i in 0..len - idx {
+            if i == len - idx - 1 {
+                self.slice[idx] = elt;
+            } else {
+                self.slice[len - i - 1] = self.slice[len - i - 2];
+            }
+        }
+    }
+
+    // returns `true` if it did anything, `false` otherwise
+    pub fn merge<'b>(&mut self, other: &'b [(Id, f32)]) -> bool {
+        let mut did_something = false;
+        let mut last_idx = 0;
+        for pair in other {
+            let i = self.slice[last_idx..]
+                .binary_search_by(|(_, d0)| OrderedFloat(*d0).cmp(&OrderedFloat(pair.1)));
+            match i {
+                Ok(i) => {
+                    self.insert(i, *pair);
+                    did_something = true;
+                    last_idx = i;
+                }
+                Err(i) => {
+                    if i >= self.slice.len() {
+                        break;
+                    } else {
+                        self.insert(i + last_idx, *pair);
+                        did_something = true;
+                        last_idx = i;
+                    }
+                }
+            }
+        }
+        did_something
+    }
+
+    pub fn merge_from<'b>(&'a mut self, other: &FixedPriorityQueue<'b, Id>) -> bool {
+        self.merge(other.slice)
+    }
+
+    pub fn iter(&'a self) -> FixedPriorityQueueIter<'a, Id> {
+        FixedPriorityQueueIter { iter: self.slice }
+    }
+}
+
+struct FixedPriorityQueueIter<'iter, Id> {
+    iter: &'iter [(Id, f32)],
+}
+
+impl<'iter, Id: Identifier> Iterator for FixedPriorityQueueIter<'iter, Id> {
+    type Item = &'iter (Id, f32);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some((head, tail)) = self.iter.split_first() {
+            if head.0.is_empty() {
+                None
+            } else {
+                self.iter = tail;
+                Some(head)
+            }
+        } else {
+            None
+        }
+    }
+}
+
+pub fn initial_id_distance_vec(size: usize) -> Vec<(VectorId, f32)> {
+    let mut vec = Vec::with_capacity(size);
+    (1..size).for_each(|_| vec.push((VectorId::empty(), f32::MAX)));
+    vec
+}
+
+pub fn empty_id_distance_vec<Id: Identifier>(size: usize) -> Vec<(Id, f32)> {
+    let mut vec = Vec::with_capacity(size);
+    (0..size).for_each(|_| vec.push((Id::empty(), f32::MAX)));
+    vec
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -1008,5 +1128,80 @@ mod tests {
         let recall = total_relevant as f32 / total as f32;
         eprintln!("with recall: {recall}");
         assert!(recall >= 0.999)
+    }
+
+    #[test]
+    fn merge_queue() {
+        // right left the same
+        let mut vs1 = vec![
+            (VectorId(1), 1.0),
+            (VectorId(3), 3.0),
+            (VectorId(5), 5.0),
+            (VectorId(7), 7.0),
+        ];
+        let mut pq1 = FixedPriorityQueue {
+            slice: &mut vs1[0..4],
+        };
+        let pq2 = FixedPriorityQueue {
+            slice: &mut [
+                (VectorId(2), 2.0),
+                (VectorId(4), 4.0),
+                (VectorId(6), 6.0),
+                (VectorId(8), 8.0),
+            ],
+        };
+        pq1.merge_from(pq2);
+        assert_eq!(
+            vs1,
+            vec![
+                (VectorId(1), 1.0),
+                (VectorId(2), 2.0),
+                (VectorId(3), 3.0),
+                (VectorId(4), 4.0)
+            ]
+        );
+
+        // left bigger than right
+        let mut vs1 = vec![
+            (VectorId(1), 1.0),
+            (VectorId(3), 3.0),
+            (VectorId(5), 5.0),
+            (VectorId(7), 7.0),
+        ];
+        let mut pq1 = FixedPriorityQueue {
+            slice: &mut vs1[0..4],
+        };
+        let pq2 = FixedPriorityQueue {
+            slice: &mut [(VectorId(2), 2.0), (VectorId(4), 4.0), (VectorId(6), 6.0)],
+        };
+        pq1.merge_from(pq2);
+        assert_eq!(
+            vs1,
+            vec![
+                (VectorId(1), 1.0),
+                (VectorId(2), 2.0),
+                (VectorId(3), 3.0),
+                (VectorId(4), 4.0)
+            ]
+        );
+
+        // right bigger than left
+        let mut vs1 = vec![(VectorId(1), 1.0), (VectorId(3), 3.0), (VectorId(5), 5.0)];
+        let mut pq1 = FixedPriorityQueue {
+            slice: &mut vs1[0..3],
+        };
+        let pq2 = FixedPriorityQueue {
+            slice: &mut [
+                (VectorId(2), 2.0),
+                (VectorId(4), 4.0),
+                (VectorId(6), 6.0),
+                (VectorId(8), 8.0),
+            ],
+        };
+        pq1.merge_from(pq2);
+        assert_eq!(
+            vs1,
+            vec![(VectorId(1), 1.0), (VectorId(2), 2.0), (VectorId(3), 3.0)]
+        );
     }
 }
