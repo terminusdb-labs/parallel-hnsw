@@ -489,14 +489,16 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
 
         for i in 0..layer_count {
             let layer = &self.layers[i];
+            let layer_number = layer_count - i - 1;
+
             // Write meta data
             let mut hnsw_layer_meta: PathBuf = path.as_ref().into();
-            hnsw_layer_meta.push(format!("layer.meta.{i}"));
+            hnsw_layer_meta.push(format!("layer.meta.{layer_number}"));
             let mut hnsw_layer_meta_file: std::fs::File = OpenOptions::new()
                 .write(true)
                 .create(true)
                 .open(&hnsw_layer_meta)?;
-            eprintln!("opened {hnsw_layer_meta:?} for layer {i}");
+            eprintln!("opened {hnsw_layer_meta:?} for layer {layer_number}");
             let neighborhood_size = layer.neighborhood_size;
             let node_count = layer.nodes.len();
             let layer_meta = serde_json::to_string(&LayerMeta {
@@ -504,16 +506,16 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                 neighborhood_size,
             })?;
             hnsw_layer_meta_file.write_all(&layer_meta.into_bytes())?;
-            eprintln!("wrote meta for layer {i}");
+            eprintln!("wrote meta for layer {layer_number}");
 
             // Write Nodes
             let mut hnsw_layer_nodes: PathBuf = path.as_ref().into();
-            hnsw_layer_nodes.push(format!("layer.nodes.{i}"));
+            hnsw_layer_nodes.push(format!("layer.nodes.{layer_number}"));
             let mut hnsw_layer_nodes_file: std::fs::File = OpenOptions::new()
                 .write(true)
                 .create(true)
                 .open(&hnsw_layer_nodes)?;
-            eprintln!("opened {hnsw_layer_nodes:?} for layer {i}");
+            eprintln!("opened {hnsw_layer_nodes:?} for layer {layer_number}");
             let node_slice_u8: &[u8] = unsafe {
                 let nodes: &[VectorId] = &layer.nodes;
                 let ptr = nodes.as_ptr() as *const u8;
@@ -521,16 +523,16 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                 slice::from_raw_parts(ptr, size)
             };
             hnsw_layer_nodes_file.write_all(node_slice_u8)?;
-            eprintln!("wrote nodes for layer {i}");
+            eprintln!("wrote nodes for layer {layer_number}");
 
             // Write Neighbors
             let mut hnsw_layer_neighbors: PathBuf = path.as_ref().into();
-            hnsw_layer_neighbors.push(format!("layer.neighbors.{i}"));
+            hnsw_layer_neighbors.push(format!("layer.neighbors.{layer_number}"));
             let mut hnsw_layer_neighbors_file = OpenOptions::new()
                 .write(true)
                 .create(true)
                 .open(&hnsw_layer_neighbors)?;
-            eprintln!("opened {hnsw_layer_neighbors_file:?} for layer {i}");
+            eprintln!("opened {hnsw_layer_neighbors_file:?} for layer {layer_number}");
             let neighbor_slice_u8: &[u8] = unsafe {
                 let neighbors: &[NodeId] = &layer.neighbors;
                 let ptr = neighbors.as_ptr() as *const u8;
@@ -538,7 +540,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                 slice::from_raw_parts(ptr, size)
             };
             hnsw_layer_neighbors_file.write_all(neighbor_slice_u8)?;
-            eprintln!("wrote neighbors for layer {i}");
+            eprintln!("wrote neighbors for layer {layer_number}");
         }
         Ok(())
     }
@@ -562,9 +564,10 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
             let comparator: C = Comparator::deserialize(&hnsw_comparator_path, params)?;
             let mut layers = Vec::with_capacity(layer_count);
             for i in 0..layer_count {
+                let layer_number = layer_count - i - 1;
                 // Read meta database_
                 let mut hnsw_layer_meta: PathBuf = path.as_ref().into();
-                hnsw_layer_meta.push(format!("layer.meta.{i}"));
+                hnsw_layer_meta.push(format!("layer.meta.{layer_number}"));
                 let mut hnsw_layer_meta_file: std::fs::File =
                     OpenOptions::new().read(true).open(dbg!(hnsw_layer_meta))?;
                 let mut contents = String::new();
@@ -575,7 +578,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                 } = serde_json::from_str(&contents)?;
 
                 let mut hnsw_layer_nodes: PathBuf = path.as_ref().into();
-                hnsw_layer_nodes.push(format!("layer.nodes.{i}"));
+                hnsw_layer_nodes.push(format!("layer.nodes.{layer_number}"));
                 let mut hnsw_layer_nodes_file: std::fs::File =
                     OpenOptions::new().read(true).open(dbg!(hnsw_layer_nodes))?;
                 let mut nodes: Vec<VectorId> = Vec::with_capacity(node_count);
@@ -592,7 +595,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                 hnsw_layer_nodes_file.read_exact(node_slice_u8)?;
 
                 let mut hnsw_layer_neighbors: PathBuf = path.as_ref().into();
-                hnsw_layer_neighbors.push(format!("layer.neighbors.{i}"));
+                hnsw_layer_neighbors.push(format!("layer.neighbors.{layer_number}"));
                 let mut hnsw_layer_neighbors_file: std::fs::File = OpenOptions::new()
                     .read(true)
                     .open(dbg!(hnsw_layer_neighbors))?;
