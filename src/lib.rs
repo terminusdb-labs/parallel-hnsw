@@ -242,6 +242,9 @@ impl<C: Comparator<T>, T> Layer<C, T> {
         while let Some((node, distance)) = visit_queue.pop() {
             let neighbors = self.get_neighbors(node);
             for (ix, n) in neighbors.iter().enumerate() {
+                if n.0 == !0 {
+                    continue;
+                }
                 if set.remove(n) {
                     let new_distance = distance + ix + 1;
                     visit_queue.push((*n, new_distance));
