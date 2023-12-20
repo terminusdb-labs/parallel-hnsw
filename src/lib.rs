@@ -592,7 +592,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                 hnsw_layer_nodes_file.read_exact(node_slice_u8)?;
 
                 let mut hnsw_layer_neighbors: PathBuf = path.as_ref().into();
-                hnsw_layer_neighbors.push("layer.neighbors.{i}");
+                hnsw_layer_neighbors.push(format!("layer.neighbors.{i}"));
                 let mut hnsw_layer_neighbors_file: std::fs::File = OpenOptions::new()
                     .read(true)
                     .open(dbg!(hnsw_layer_neighbors))?;
