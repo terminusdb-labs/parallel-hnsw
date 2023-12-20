@@ -202,7 +202,9 @@ impl<C: Comparator<T>, T> Layer<C, T> {
                         .is_ok()
                     {
                         let neighbors = self.get_neighbors(node);
-                        for (ix, neighbor) in neighbors.iter().enumerate() {
+                        for (ix, neighbor) in
+                            neighbors.iter().enumerate().filter(|(_, n)| n.0 != !0)
+                        {
                             let total_distance = distance.load(atomic::Ordering::Relaxed) + ix + 1;
                             let AtomicNodeDistance { index_sum, .. } = &result[neighbor.0];
                             index_sum
@@ -214,7 +216,9 @@ impl<C: Comparator<T>, T> Layer<C, T> {
                                 .unwrap();
                         }
 
-                        rayon::iter::Either::Left(neighbors.into_par_iter().cloned())
+                        rayon::iter::Either::Left(
+                            neighbors.into_par_iter().cloned().filter(|n| n.0 != !0),
+                        )
                     } else {
                         rayon::iter::Either::Right(rayon::iter::empty())
                     }
