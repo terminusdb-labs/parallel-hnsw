@@ -174,6 +174,10 @@ pub struct Hnsw<C: Comparator<T>, T: Sync> {
 }
 
 impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
+    pub fn vector_count(&self) -> usize {
+        self.get_layer(0).map(|l| l.node_count()).unwrap_or(0)
+    }
+
     pub fn get_layer(&self, i: usize) -> Option<&Layer<C, T>> {
         self.get_layer_from_top(self.layers.len() - i - 1)
     }
