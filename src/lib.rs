@@ -749,8 +749,13 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
 
     pub fn node_distances_for_layer(&self, layer_id: usize) -> Vec<NodeDistance> {
         let layer = self.get_layer_from_top(layer_id).unwrap();
+        #[allow(unused_assignments)]
+        let mut borrow = None;
         let vectors = if layer_id == 0 {
-            &[]
+            // we're gonna assume a fake parent - node 0
+            let node_0 = layer.nodes[0];
+            borrow = Some([node_0]);
+            borrow.as_ref().unwrap()
         } else {
             &self.get_layer_from_top(layer_id - 1).unwrap().nodes[..]
         };
