@@ -549,12 +549,12 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
     ) -> Result<Option<Self>, SerializationError> {
         let mut hnsw_meta: PathBuf = path.as_ref().into();
         hnsw_meta.push("meta");
-        let mut hnsw_meta_file = OpenOptions::new().read(true).open(hnsw_meta)?;
+        let mut hnsw_meta_file = OpenOptions::new().read(true).open(dbg!(hnsw_meta))?;
         let mut contents = String::new();
         hnsw_meta_file.read_to_string(&mut contents)?;
         let HNSWMeta { layer_count }: HNSWMeta = serde_json::from_str(&contents)?;
 
-        let mut hnsw_comparator_path: PathBuf = path.as_ref().into();
+        let mut hnsw_comparator_path: PathBuf = dbg!(path.as_ref().into());
         hnsw_comparator_path.push("comparator");
 
         // If we don't have a comparator, the HNSW is empty
@@ -566,7 +566,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                 let mut hnsw_layer_meta: PathBuf = path.as_ref().into();
                 hnsw_layer_meta.push(format!("layer.meta.{i}"));
                 let mut hnsw_layer_meta_file: std::fs::File =
-                    OpenOptions::new().read(true).open(hnsw_layer_meta)?;
+                    OpenOptions::new().read(true).open(dbg!(hnsw_layer_meta))?;
                 let mut contents = String::new();
                 hnsw_layer_meta_file.read_to_string(&mut contents)?;
                 let LayerMeta {
@@ -577,7 +577,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                 let mut hnsw_layer_nodes: PathBuf = path.as_ref().into();
                 hnsw_layer_nodes.push(format!("layer.nodes.{i}"));
                 let mut hnsw_layer_nodes_file: std::fs::File =
-                    OpenOptions::new().read(true).open(hnsw_layer_nodes)?;
+                    OpenOptions::new().read(true).open(dbg!(hnsw_layer_nodes))?;
                 let mut nodes: Vec<VectorId> = Vec::with_capacity(node_count);
                 #[allow(clippy::uninit_vec)]
                 unsafe {
@@ -593,8 +593,9 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
 
                 let mut hnsw_layer_neighbors: PathBuf = path.as_ref().into();
                 hnsw_layer_neighbors.push("layer.neighbors.{i}");
-                let mut hnsw_layer_neighbors_file: std::fs::File =
-                    OpenOptions::new().read(true).open(hnsw_layer_neighbors)?;
+                let mut hnsw_layer_neighbors_file: std::fs::File = OpenOptions::new()
+                    .read(true)
+                    .open(dbg!(hnsw_layer_neighbors))?;
                 let mut neighbors: Vec<NodeId> = Vec::with_capacity(node_count * neighborhood_size);
                 #[allow(clippy::uninit_vec)]
                 unsafe {
