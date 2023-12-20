@@ -233,6 +233,25 @@ impl<C: Comparator<T>, T> Layer<C, T> {
 
         result.into_iter().map(|r| r.finalize()).collect()
     }
+
+    pub fn reachables_from(&self, node: NodeId, check: &[NodeId]) -> Vec<(NodeId, usize)> {
+        let mut set: HashSet<NodeId> = HashSet::with_capacity(check.len());
+        set.extend(check);
+        let mut result = vec![(node, 0)];
+        let mut visit_queue = vec![(node, 0)];
+        while let Some((node, distance)) = visit_queue.pop() {
+            let neighbors = self.get_neighbors(node);
+            for (ix, n) in neighbors.iter().enumerate() {
+                if set.remove(n) {
+                    let new_distance = distance + ix + 1;
+                    visit_queue.push((*n, new_distance));
+                    result.push((*n, new_distance));
+                }
+            }
+        }
+
+        result
+    }
 }
 
 struct AtomicNodeDistance {
@@ -733,6 +752,16 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
             &self.get_layer_from_top(layer_id - 1).unwrap().nodes[..]
         };
         layer.node_distances(vectors)
+    }
+
+    pub fn reachables_from_node_for_layer(
+        &self,
+        layer_id: usize,
+        node: NodeId,
+        check: &[NodeId],
+    ) -> Vec<(NodeId, usize)> {
+        let layer = self.get_layer_from_top(layer_id).unwrap();
+        layer.reachables_from(node, check)
     }
 }
 
