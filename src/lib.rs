@@ -600,7 +600,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
         vs: &Vec<VectorId>,
         comparator: &C,
         number_of_supers_to_check: usize,
-    ) -> Vec<(NodeId, VectorId, Vec<(NodeId, f32)>)> {
+    ) -> Vec<(NodeId, VectorId, NodeDistances)> {
         let mut initial_partitions: Vec<(NodeId, VectorId, NodeDistances)> =
             Vec::with_capacity(vs.len());
         vs.par_iter()
