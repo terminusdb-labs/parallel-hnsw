@@ -79,6 +79,8 @@ pub struct Layer<C: Comparator<T>, T> {
 
 unsafe impl<C: Comparator<T>, T> Sync for Layer<C, T> {}
 
+type NodeDistances = Vec<(NodeId, f32)>;
+
 impl<C: Comparator<T>, T> Layer<C, T> {
     #[allow(unused)]
     fn get_node(&self, v: VectorId) -> Option<NodeId> {
@@ -255,6 +257,78 @@ impl<C: Comparator<T>, T> Layer<C, T> {
 
         result
     }
+
+    pub fn discover_nodes_to_promote(&self, supers: &[VectorId]) -> Vec<NodeId> {
+        let bottom_distances: Vec<NodeDistance> = self.node_distances(supers);
+
+        let bottom_distances: Vec<(NodeId, usize)> = bottom_distances
+            .into_iter()
+            .enumerate()
+            .map(|(ix, d)| (NodeId(ix), d.index_sum))
+            .collect();
+
+        let unreachables: Vec<NodeId> = bottom_distances
+            .iter()
+            .take_while(|(_, d)| *d == !0)
+            .map(|(n, _)| *n)
+            .collect();
+
+        let mut clusters: Vec<(NodeId, Vec<(NodeId, usize)>)> = unreachables
+            .par_iter()
+            .map(|node| (*node, self.reachables_from(*node, &unreachables[..])))
+            .collect();
+
+        clusters.sort_by_key(|c| usize::MAX - c.1.len());
+
+        let mut cluster_queue: Vec<_> = clusters.iter().map(Some).collect();
+        cluster_queue.reverse();
+        let mut nodes_to_promote: Vec<NodeId> = Vec::new();
+        while let Some(next) = cluster_queue.pop() {
+            if let Some((nodeid, _)) = next {
+                nodes_to_promote.push(*nodeid);
+                for other in cluster_queue.iter_mut() {
+                    if let Some((_, other_distances)) = other {
+                        if other_distances.iter().any(|(n, _)| nodeid == n) {
+                            *other = None
+                        }
+                    }
+                }
+            }
+        }
+        // TODO! Use buget to increase this with the tail from bottom_distances
+
+        nodes_to_promote
+    }
+
+    pub fn extend(&self, vecs: Vec<VectorId>, supers: &[VectorId]) {
+        /*
+        1. create new vector for nodes of size nodes.len() + vecs.len()
+        2. create a new neighborhood vector of size new_nodes.len() * neighborhood_size
+        3. Sort vecs, and walk through nodes with vecs, copying whichever is least
+        4. Continue with neighborhoods in the same fashion
+        5. Calculate the neighborhoods for vecs
+        6. Write into neighborhoods
+         */
+        todo!();
+        /*
+            let mut new_nodes = Vec::with_capacity(vecs.len() + self.nodes.len());
+            new_nodes.extend(vecs);
+            new_nodes.extend(self.nodes);
+            new_nodes.sort();
+            //let extended_neighborhoods =
+            let mut new_neighborhoods = Vec::with_capacity(new_nodes.len() * self.neighborhood_size);
+            let vec_queue = vecs.clone();
+            let mut last = None;
+            for i in 0..self.nodes.len() {
+                let v = nodes[i];
+                while vec.last() > Some(v) {
+                    new_nodes.push(vec.pop().unwrap());
+                    let neighbors = vec![NodeId(!0); self.neighborhood_size];
+                    new_neighborhoods.extend(neighbors)
+                }
+        }
+            */
+    }
 }
 
 struct AtomicNodeDistance {
@@ -386,35 +460,12 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
         vs: Vec<VectorId>,
         neighborhood_size: usize,
     ) -> Layer<C, T> {
-        type Distances = Vec<(NodeId, f32)>;
         // Parameter for the number of neighbours to look at from the proceeding layer.
         let number_of_supers_to_check = 5; // neighborhood_size;
 
         // 1. Calculate our node id, and find our neighborhood in the above layer
-        let mut initial_partitions: Vec<(NodeId, VectorId, Distances)> =
-            Vec::with_capacity(vs.len());
-        vs.par_iter()
-            .enumerate()
-            .map(|(node_id, vector_id)| {
-                let comparator = comparator.clone();
-                let initial_vector_distances = if self.layers.is_empty() {
-                    Self::compare_all(comparator, *vector_id, vs.clone())
-                } else {
-                    self.initial_vector_distances(*vector_id, number_of_supers_to_check)
-                };
-                let initial_node_distances: Vec<_> = initial_vector_distances
-                    .into_iter()
-                    .map(|(vector_id, distance)| {
-                        (NodeId(vs.binary_search(&vector_id).unwrap()), distance)
-                    })
-                    .collect();
-                (NodeId(node_id), *vector_id, initial_node_distances)
-            })
-            .collect_into_vec(&mut initial_partitions);
-
-        initial_partitions.par_sort_unstable_by_key(|(_node_id, _vector_id, distances)| {
-            distances.first().map(|(_, d)| OrderedFloat(*d))
-        });
+        let initial_partitions =
+            self.generate_initial_partitions(&vs, &comparator, number_of_supers_to_check);
 
         // 2. Partition the layer in terms of the closeness to the
         // best node in the layer above
@@ -425,7 +476,7 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
         // 3. Calculate our neighbourhoods by comparing distances in our partition
         let borrowed_comparator = &comparator;
 
-        let mut all_distances: Vec<Distances> = Vec::with_capacity(vs.len());
+        let mut all_distances: Vec<NodeDistances> = Vec::with_capacity(vs.len());
         #[allow(clippy::uninit_vec)]
         unsafe {
             all_distances.set_len(vs.len());
@@ -476,7 +527,8 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
                         .take(neighborhood_size)
                         .collect();
                     // eprintln!("distances@vec {vector_id:?}: {distances:?}");
-                    let unsafe_distances: *mut Distances = all_distances.as_ptr() as *mut Distances;
+                    let unsafe_distances: *mut NodeDistances =
+                        all_distances.as_ptr() as *mut NodeDistances;
                     unsafe {
                         let offset = unsafe_distances.add(node_id.0);
 
@@ -541,6 +593,39 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
             neighbors,
             _phantom: PhantomData,
         }
+    }
+
+    fn generate_initial_partitions(
+        &self,
+        vs: &Vec<VectorId>,
+        comparator: &C,
+        number_of_supers_to_check: usize,
+    ) -> Vec<(NodeId, VectorId, Vec<(NodeId, f32)>)> {
+        let mut initial_partitions: Vec<(NodeId, VectorId, NodeDistances)> =
+            Vec::with_capacity(vs.len());
+        vs.par_iter()
+            .enumerate()
+            .map(|(node_id, vector_id)| {
+                let comparator = comparator.clone();
+                let initial_vector_distances = if self.layers.is_empty() {
+                    Self::compare_all(comparator, *vector_id, vs.clone())
+                } else {
+                    self.initial_vector_distances(*vector_id, number_of_supers_to_check)
+                };
+                let initial_node_distances: Vec<_> = initial_vector_distances
+                    .into_iter()
+                    .map(|(vector_id, distance)| {
+                        (NodeId(vs.binary_search(&vector_id).unwrap()), distance)
+                    })
+                    .collect();
+                (NodeId(node_id), *vector_id, initial_node_distances)
+            })
+            .collect_into_vec(&mut initial_partitions);
+
+        initial_partitions.par_sort_unstable_by_key(|(_node_id, _vector_id, distances)| {
+            distances.first().map(|(_, d)| OrderedFloat(*d))
+        });
+        initial_partitions
     }
 
     pub fn generate(
@@ -747,19 +832,19 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
             .unwrap_or(AllVectorIterator::Empty)
     }
 
-    pub fn node_distances_for_layer(&self, layer_id: usize) -> Vec<NodeDistance> {
-        let layer = self.get_layer_from_top(layer_id).unwrap();
-        #[allow(unused_assignments)]
-        let mut borrow = None;
-        let vectors = if layer_id == 0 {
-            // we're gonna assume a fake parent - node 0
-            let node_0 = layer.nodes[0];
-            borrow = Some([node_0]);
-            borrow.as_ref().unwrap()
+    pub fn supers_for_layer(&self, layer_id: usize) -> &[VectorId] {
+        if layer_id == 0 {
+            let layer = self.get_layer_from_top(layer_id).unwrap();
+            &layer.nodes[0..1]
         } else {
             &self.get_layer_from_top(layer_id - 1).unwrap().nodes[..]
-        };
-        layer.node_distances(vectors)
+        }
+    }
+
+    pub fn node_distances_for_layer(&self, layer_id: usize) -> Vec<NodeDistance> {
+        let layer = self.get_layer_from_top(layer_id).unwrap();
+        let supers = self.supers_for_layer(layer_id);
+        layer.node_distances(supers)
     }
 
     pub fn reachables_from_node_for_layer(
@@ -770,6 +855,32 @@ impl<C: Comparator<T>, T: Sync> Hnsw<C, T> {
     ) -> Vec<(NodeId, usize)> {
         let layer = self.get_layer_from_top(layer_id).unwrap();
         layer.reachables_from(node, check)
+    }
+
+    pub fn discover_vectors_to_promote(&self, layer_id: usize) -> Vec<VectorId> {
+        self.get_layer_from_top(layer_id)
+            .map(|layer| {
+                let supers = self.supers_for_layer(layer_id);
+                layer
+                    .discover_nodes_to_promote(supers)
+                    .iter()
+                    .map(|n| layer.get_vector(*n))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn extend_layer(&self, layer_id: usize, vecs: Vec<VectorId>) {
+        let layer = self.get_layer_from_top(layer_id).unwrap();
+        let supers = self.supers_for_layer(layer_id);
+        layer.extend(vecs, supers);
+    }
+
+    pub fn improve_index(&self) {
+        for layer_id in 0..self.layer_count() {
+            let vecs = self.discover_vectors_to_promote(layer_id);
+            self.extend_layer(layer_id, vecs)
+        }
     }
 }
 
