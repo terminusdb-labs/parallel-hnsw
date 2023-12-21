@@ -1134,14 +1134,11 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         });
     }
 
-    pub fn improve_index(&self) {
-        todo!();
-        /*
+    pub fn improve_index(&mut self) {
         for layer_id in 0..self.layer_count() {
             let vecs = self.discover_vectors_to_promote(layer_id);
             self.extend_layer(layer_id, vecs)
         }
-        */
     }
 }
 
