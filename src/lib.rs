@@ -1014,78 +1014,123 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         let layer_count = layers_above.len() + 1;
         let borrowed_comparator = &layer.comparator;
 
-        partition_groups.par_iter().for_each(|(sup, partition)| {
-            let sup_neighbors: NodeDistances = sup
-                .map(|sup| {
-                    let res: NodeDistances = pseudo_layer
-                        .nearest_neighbors(sup, 10 * layer.neighborhood_size)
-                        .iter()
-                        .map(|n| (NodeId(old_nodes_map[n.0 .0]), n.1))
-                        .collect();
-                    res
-                })
-                .unwrap_or_default();
-            // do stuff
-            partition
-                .par_iter()
-                .for_each(|(node_id, vector_id, distances)| {
-                    let mut distances = distances.clone();
-                    let super_nodes: Vec<_> =
-                        distances.iter().map(|(node, _)| node).cloned().collect();
+        let foo: Vec<_> = partition_groups
+            .par_iter()
+            .map(|(sup, partition)| {
+                let sup_neighbors: NodeDistances = sup
+                    .map(|sup| {
+                        let res: NodeDistances = pseudo_layer
+                            .nearest_neighbors(sup, 10 * layer.neighborhood_size)
+                            .iter()
+                            .map(|n| (NodeId(old_nodes_map[n.0 .0]), n.1))
+                            .collect();
+                        res
+                    })
+                    .unwrap_or_default();
+                // do stuff
+                partition
+                    .par_iter()
+                    .flat_map(|(node_id, vector_id, distances)| {
+                        let mut distances = distances.clone();
+                        let super_nodes: Vec<_> =
+                            distances.iter().map(|(node, _)| node).cloned().collect();
 
-                    distances.extend(&sup_neighbors);
+                        distances.extend(&sup_neighbors);
 
-                    // some random, some for neighborhood
-                    // TODO - also some random extra nodes on the same layer
-                    let mut prng = StdRng::seed_from_u64(
-                        layer_count as u64 + vector_id.0 as u64 + layer_node_len as u64,
-                    );
-
-                    let mut partitions: Vec<_> = super_nodes
-                        .into_iter()
-                        .filter_map(|n| partition_groups.get(&Some(n)))
-                        .collect();
-                    if partitions.is_empty() {
-                        // probably we're in the top layer. best add ourselves.
-                        partitions.push(partition);
-                    }
-                    let partition_maxes: Vec<_> = partitions.iter().map(|p| p.len()).collect();
-
-                    let choice_count =
-                        std::cmp::min(layer.neighborhood_size * 10, partition_maxes.iter().sum());
-                    let partition_choices =
-                        choose_n(choice_count, partition_maxes, node_id.0, &mut prng);
-
-                    for i in 0..partition_choices.len() {
-                        let partition = partitions[partition_choices[i].0];
-                        let choice = &partition[partition_choices[i].1];
-                        let distance = borrowed_comparator.compare_vec(
-                            AbstractVector::Stored(*vector_id),
-                            AbstractVector::Stored(choice.1),
+                        // some random, some for neighborhood
+                        // TODO - also some random extra nodes on the same layer
+                        let mut prng = StdRng::seed_from_u64(
+                            layer_count as u64 + vector_id.0 as u64 + layer_node_len as u64,
                         );
-                        distances.push((choice.0, distance));
-                    }
-                    distances.sort_by_key(|(_, d)| OrderedFloat(*d));
-                    distances.dedup();
 
-                    let mut neighbors: Vec<_> = distances
-                        .into_iter()
-                        .filter(|(n, _d)| node_id != n)
-                        .take(layer.neighborhood_size)
-                        .map(|(n, _)| n)
-                        .collect();
-                    let fill_min = layer.neighborhood_size - neighbors.len();
-                    let zero_fill = vec![NodeId(!0); fill_min];
-                    neighbors.extend(zero_fill);
+                        let mut partitions: Vec<_> = super_nodes
+                            .into_iter()
+                            .filter_map(|n| partition_groups.get(&Some(n)))
+                            .collect();
+                        if partitions.is_empty() {
+                            // probably we're in the top layer. best add ourselves.
+                            partitions.push(partition);
+                        }
+                        let partition_maxes: Vec<_> = partitions.iter().map(|p| p.len()).collect();
 
-                    let new_neighborhood = unsafe {
-                        std::slice::from_raw_parts_mut(
-                            layer.neighbors.as_ptr().add(node_id.0) as *mut NodeId,
-                            layer.neighborhood_size,
-                        )
-                    };
-                    new_neighborhood.copy_from_slice(&neighbors);
-                });
+                        let choice_count = std::cmp::min(
+                            layer.neighborhood_size * 10,
+                            partition_maxes.iter().sum(),
+                        );
+                        let partition_choices =
+                            choose_n(choice_count, partition_maxes, node_id.0, &mut prng);
+
+                        for i in 0..partition_choices.len() {
+                            let partition = partitions[partition_choices[i].0];
+                            let choice = &partition[partition_choices[i].1];
+                            let distance = borrowed_comparator.compare_vec(
+                                AbstractVector::Stored(*vector_id),
+                                AbstractVector::Stored(choice.1),
+                            );
+                            distances.push((choice.0, distance));
+                        }
+                        distances.sort_by_key(|(_, d)| OrderedFloat(*d));
+                        distances.dedup();
+                        let distances: NodeDistances = distances
+                            .into_iter()
+                            .filter(|(n, _d)| node_id != n)
+                            .take(layer.neighborhood_size)
+                            .collect();
+
+                        let mut neighbors: Vec<_> = distances.iter().map(|(n, _)| *n).collect();
+                        let fill_min = layer.neighborhood_size - neighbors.len();
+                        let zero_fill = vec![NodeId(!0); fill_min];
+                        neighbors.extend(zero_fill);
+
+                        let new_neighborhood = unsafe {
+                            std::slice::from_raw_parts_mut(
+                                layer.neighbors.as_ptr().add(node_id.0) as *mut NodeId,
+                                layer.neighborhood_size,
+                            )
+                        };
+                        new_neighborhood.copy_from_slice(&neighbors);
+
+                        distances
+                            .into_par_iter()
+                            .map(|(n, distance)| (n, *node_id, distance))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        let mut foo2: Vec<_> = foo.into_iter().flatten().collect();
+        foo2.par_sort_unstable_by_key(|(n, _, _)| *n);
+        let final_groups = foo2.into_iter().into_group_map_by(|(n, _, _)| *n);
+
+        final_groups.into_par_iter().for_each(|(node, group)| {
+            // 1. find all distances to existing neighbors for this node
+            let neighborhood = unsafe {
+                std::slice::from_raw_parts_mut(
+                    layer.neighbors.as_ptr().add(node.0) as *mut NodeId,
+                    layer.neighborhood_size,
+                )
+            };
+            let mut distances: NodeDistances = Vec::new();
+            for neighbor in neighborhood.iter().take_while(|n| n.0 != !0) {
+                distances.push((
+                    *neighbor,
+                    layer.comparator.compare_vec(
+                        AbstractVector::Stored(layer.get_vector(node)),
+                        AbstractVector::Stored(layer.get_vector(*neighbor)),
+                    ),
+                ));
+            }
+            // 2. add the new distances that we got in 'group'
+            for (_, neighbor, distance) in group {
+                distances.push((neighbor, distance));
+            }
+            // 3. sort, dedup, truncate.
+            distances.sort_by_key(|(_, distance)| OrderedFloat(*distance));
+            distances.truncate(layer.neighborhood_size);
+
+            // 4. write back new neighbor list.
+            let new_neighborhood: Vec<_> = distances.into_iter().map(|(n, _)| n).collect();
+            neighborhood.copy_from_slice(&new_neighborhood);
         });
     }
 
