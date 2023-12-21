@@ -79,6 +79,12 @@ pub struct Layer<C: Comparator<T>, T> {
 
 unsafe impl<C: Comparator<T>, T> Sync for Layer<C, T> {}
 
+impl<C: Comparator<T>, T> AsRef<Layer<C, T>> for Layer<C, T> {
+    fn as_ref(&self) -> &Layer<C, T> {
+        self
+    }
+}
+
 type NodeDistances = Vec<(NodeId, f32)>;
 
 impl<C: Comparator<T>, T> Layer<C, T> {
@@ -364,13 +370,13 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
         VectorId(0)
     }
 
-    fn generate_initial_partitions(
+    fn generate_initial_partitions<L: AsRef<Layer<C, T>> + Sync>(
         &self,
         vs: &[VectorId],
         nodes: &[VectorId],
         comparator: &C,
         number_of_supers_to_check: usize,
-        layers: &[Layer<C, T>],
+        layers: &[L],
     ) -> Vec<(NodeId, VectorId, NodeDistances)> {
         let mut initial_partitions: Vec<(NodeId, VectorId, NodeDistances)> =
             Vec::with_capacity(vs.len());
@@ -399,11 +405,11 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
         initial_partitions
     }
 
-    pub fn initial_vector_distances(
+    pub fn initial_vector_distances<L: AsRef<Layer<C, T>>>(
         &self,
         v: VectorId,
         number_of_nodes: usize,
-        layers: &[Layer<C, T>],
+        layers: &[L],
     ) -> Vec<(VectorId, f32)> {
         self.search_layers(AbstractVector::Stored(v), number_of_nodes, layers)
             .into_iter()
@@ -411,18 +417,19 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
             .collect::<Vec<_>>()
     }
 
-    pub fn search_layers(
+    pub fn search_layers<L: AsRef<Layer<C, T>>>(
         &self,
         v: AbstractVector<T>,
         number_of_candidates: usize,
-        layers: &[Layer<C, T>],
+        layers: &[L],
     ) -> Vec<(VectorId, f32)> {
         let upper_layer_candidate_count = 1;
         let entry_vector = self.entry_vector();
         let distance_from_entry = layers
             .first()
             .map(|l| {
-                l.comparator
+                l.as_ref()
+                    .comparator
                     .compare_vec(v.clone(), AbstractVector::Stored(entry_vector))
             })
             .unwrap_or(0.0);
@@ -435,7 +442,10 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
                 upper_layer_candidate_count
             };
             let layer = &layers[i];
-            let closest = layer.closest_vectors(v.clone(), &candidates_queue, candidate_count);
+            let closest =
+                layer
+                    .as_ref()
+                    .closest_vectors(v.clone(), &candidates_queue, candidate_count);
             candidates_queue.extend(closest);
             candidates_queue.sort_by_key(|(v, d)| (OrderedFloat(*d), *v));
             candidates_queue.dedup();
@@ -969,6 +979,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 }
             });
 
+        /*
         let number_of_supers_to_check = 5; // TODO make constant that is shared
 
         // unlike in initial generation, here the vectors we want to
@@ -981,6 +992,46 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             number_of_supers_to_check,
             layers_above,
         );
+
+        let partition_groups = initial_partitions
+            .into_iter()
+            .into_group_map_by(|(_, _, distances)| distances.first().map(|(id, _)| *id));
+
+        let mut all_distances: Vec<NodeDistances> = Vec::with_capacity(vecs.len());
+
+        let layer_node_len = layer.nodes.len();
+        partition_groups.par_iter().for_each(|(_, partition)| {
+            // do stuff
+            partition
+                .par_iter()
+                .for_each(|(node_id, vector_id, distances)| {
+                    let mut distances = distances.clone();
+                    let super_nodes: Vec<_> =
+                        distances.iter().map(|(node, _)| node).cloned().collect();
+
+                    // some random, some for neighborhood
+                    // TODO - also some random extra nodes on the same layer
+                    let mut prng = StdRng::seed_from_u64(
+                        self.layer_count() as u64 + vector_id.0 as u64 + layer_node_len as u64,
+                    );
+
+                    let mut partitions: Vec<_> = super_nodes
+                        .into_iter()
+                        .filter_map(|n| partition_groups.get(&Some(n)))
+                        .collect();
+                    if partitions.is_empty() {
+                        // probably we're in the top layer. best add ourselves.
+                        partitions.push(partition);
+                    }
+                    let partition_maxes: Vec<_> = partitions.iter().map(|p| p.len()).collect();
+
+                    let choice_count =
+                        std::cmp::min(neighborhood_size * 10, partition_maxes.iter().sum());
+                    let partition_choices =
+                        choose_n(choice_count, partition_maxes, node_id.0, &mut prng);
+                });
+        });
+        */
         // calculate neighborhoods for incoming vectors
 
         /*
