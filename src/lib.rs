@@ -455,6 +455,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         // 1. Calculate our node id, and find our neighborhood in the above layer
         let initial_partitions = self.generate_initial_partitions(
             &vs,
+            &vs, // for initial generation, vs is all nodes
             &comparator,
             number_of_supers_to_check,
             self.layer_count(),
@@ -591,6 +592,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
     fn generate_initial_partitions(
         &self,
         vs: &[VectorId],
+        nodes: &[VectorId],
         comparator: &C,
         number_of_supers_to_check: usize,
         upto_layer: usize,
@@ -609,7 +611,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 let initial_node_distances: Vec<_> = initial_vector_distances
                     .into_iter()
                     .map(|(vector_id, distance)| {
-                        (NodeId(vs.binary_search(&vector_id).unwrap()), distance)
+                        (NodeId(nodes.binary_search(&vector_id).unwrap()), distance)
                     })
                     .collect();
                 (NodeId(node_id), *vector_id, initial_node_distances)
@@ -867,7 +869,6 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
     pub fn extend_layer(&mut self, layer_id: usize, mut vecs: Vec<VectorId>) {
         let layer: &'static mut Layer<C, T> =
             unsafe { &mut *(self.get_layer_from_top_mut(layer_id).unwrap() as *mut Layer<C, T>) };
-        let supers = self.supers_for_layer(layer_id);
         /*
         1. create new vector for nodes of size nodes.len() + vecs.len()
         2. create a new neighborhood vector of size new_nodes.len() * neighborhood_size
@@ -939,6 +940,18 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 }
             });
 
+        let number_of_supers_to_check = 5; // TODO make constant that is shared
+
+        // unlike in initial generation, here the vectors we want to
+        // generate partitions for, and the complete node list, are
+        // different values
+        let initial_partitions = self.generate_initial_partitions(
+            &vecs,
+            &layer.nodes,
+            &layer.comparator,
+            number_of_supers_to_check,
+            layer_id - 1,
+        );
         // calculate neighborhoods for incoming vectors
 
         /*
