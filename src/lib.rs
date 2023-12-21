@@ -308,7 +308,16 @@ impl<C: Comparator<T>, T> Layer<C, T> {
             }
         }
         // TODO! Use buget to increase this with the tail from bottom_distances
-
+        eprintln!("nodes to promote {:?}", &nodes_to_promote);
+        let budget = self.node_count() / 100;
+        let tail_length = budget.saturating_sub(nodes_to_promote.len());
+        nodes_to_promote.extend(
+            bottom_distances
+                .iter()
+                .map(|(n, _)| n)
+                .skip(unreachables.len())
+                .take(tail_length),
+        );
         nodes_to_promote
     }
 }
@@ -677,11 +686,11 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             layers,
             immutable: HnswSearcher::default(),
         };
-        for i in 0..layer_count {
+        let partitions = calculate_partitions(total_size, neighborhood_size);
+        assert_eq!(partitions.len(), layer_count);
+        for (i, length) in partitions.iter().enumerate() {
             let level = layer_count - i - 1;
-            // eprintln!("Generating level {level}");
-            let layer_size = neighborhood_size.pow(i as u32 + 1);
-            let slice_length = std::cmp::min(layer_size, vs.len());
+            let slice_length = std::cmp::min(*length, total_size);
             let slice = &vs[0..slice_length];
             let neighbors = if level == 0 {
                 zero_layer_neighborhood_size
@@ -938,19 +947,19 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 (None, None) => break,
                 (Some(_), None) => {
                     layer.nodes.push(*old_nodes_iter.next().unwrap());
-                    old_nodes_map.push(layer.nodes.len());
+                    old_nodes_map.push(layer.nodes.len() - 1);
                 }
                 (None, Some(_)) => {
                     layer.nodes.push(*new_nodes_iter.next().unwrap());
-                    new_nodes_map.push(layer.nodes.len());
+                    new_nodes_map.push(layer.nodes.len() - 1);
                 }
                 (Some(old), Some(new)) => {
                     if old < new {
                         layer.nodes.push(*old_nodes_iter.next().unwrap());
-                        old_nodes_map.push(layer.nodes.len());
+                        old_nodes_map.push(layer.nodes.len() - 1);
                     } else {
                         layer.nodes.push(*new_nodes_iter.next().unwrap());
-                        new_nodes_map.push(layer.nodes.len());
+                        new_nodes_map.push(layer.nodes.len() - 1);
                     }
                 }
             }
@@ -975,16 +984,21 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 let new_node_id = old_nodes_map[old_node_id];
                 let new_neighborhood = unsafe {
                     std::slice::from_raw_parts_mut(
-                        layer.neighbors.as_ptr().add(new_node_id) as *mut NodeId,
+                        layer
+                            .neighbors
+                            .as_ptr()
+                            .add(new_node_id * layer.neighborhood_size)
+                            as *mut NodeId,
                         layer.neighborhood_size,
                     )
                 };
 
                 for i in 0..layer.neighborhood_size {
                     if old_neighborhood[i].0 == !0 {
-                        break;
+                        new_neighborhood[i] = NodeId(!0);
+                    } else {
+                        new_neighborhood[i] = NodeId(old_nodes_map[old_neighborhood[i].0]);
                     }
-                    new_neighborhood[i] = NodeId(old_nodes_map[old_neighborhood[i].0]);
                 }
             });
 
@@ -1085,9 +1099,14 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                         let zero_fill = vec![NodeId(!0); fill_min];
                         neighbors.extend(zero_fill);
 
+                        assert_eq!(neighbors.len(), layer.neighborhood_size);
                         let new_neighborhood = unsafe {
                             std::slice::from_raw_parts_mut(
-                                layer.neighbors.as_ptr().add(node_id.0) as *mut NodeId,
+                                layer
+                                    .neighbors
+                                    .as_ptr()
+                                    .add(node_id.0 * layer.neighborhood_size)
+                                    as *mut NodeId,
                                 layer.neighborhood_size,
                             )
                         };
@@ -1109,7 +1128,10 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             // 1. find all distances to existing neighbors for this node
             let neighborhood = unsafe {
                 std::slice::from_raw_parts_mut(
-                    layer.neighbors.as_ptr().add(node.0) as *mut NodeId,
+                    layer
+                        .neighbors
+                        .as_ptr()
+                        .add(node.0 * layer.neighborhood_size) as *mut NodeId,
                     layer.neighborhood_size,
                 )
             };
@@ -1133,7 +1155,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
 
             // 4. write back new neighbor list.
             let new_neighborhood: Vec<_> = distances.into_iter().map(|(n, _)| n).collect();
-            neighborhood.copy_from_slice(&new_neighborhood);
+            neighborhood.copy_from_slice(&new_neighborhood)
         });
     }
 
@@ -1223,6 +1245,18 @@ fn choose_n(
         }
     }
     set.into_iter().collect()
+}
+
+fn calculate_partitions(total_size: usize, order: usize) -> Vec<usize> {
+    let mut partitions: Vec<usize> = vec![];
+    let mut size = total_size;
+    let layer_count = (total_size as f32).log(order as f32).ceil() as usize;
+    for _ in 0..layer_count {
+        partitions.push(size);
+        size /= order;
+    }
+    partitions.reverse();
+    partitions
 }
 
 #[cfg(test)]
@@ -1523,6 +1557,14 @@ mod tests {
 
         do_test_recall(&hnsw, 0.999);
         hnsw.improve_index();
+
+        let layer = hnsw.get_layer_from_top(0).unwrap();
+        let nodes = &layer.nodes;
+        let neighbors = &layer.neighbors;
+        eprintln!("Layer 0");
+        eprintln!("nodes: {nodes:?}");
+        eprintln!("neighbors: {neighbors:?}");
+        eprintln!("usize max: {}", !0_usize);
         do_test_recall(&hnsw, 1.0);
     }
 }
