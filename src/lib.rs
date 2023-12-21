@@ -390,7 +390,7 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
             .enumerate()
             .map(|(node_id, vector_id)| {
                 let comparator = comparator.clone();
-                let initial_vector_distances = if layers.len() - 1 == 0 {
+                let initial_vector_distances = if layers.is_empty() {
                     Self::compare_all(comparator, *vector_id, vs)
                 } else {
                     self.initial_vector_distances(*vector_id, number_of_supers_to_check, layers)
@@ -981,6 +981,9 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 };
 
                 for i in 0..layer.neighborhood_size {
+                    if old_neighborhood[i].0 == !0 {
+                        break;
+                    }
                     new_neighborhood[i] = NodeId(old_nodes_map[old_neighborhood[i].0]);
                 }
             });
@@ -1478,11 +1481,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_recall() {
-        let size = 10000;
-        let dimension = 10;
-        let hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
+    fn do_test_recall(hnsw: &Hnsw<BigComparator, BigVec>, minimum_recall: f32) {
         let data = &hnsw.layers[0].comparator.data;
         let total = data.len();
         let mut total_relevant = 0;
@@ -1513,6 +1512,17 @@ mod tests {
         eprintln!("from total: {total}");
         let recall = total_relevant as f32 / total as f32;
         eprintln!("with recall: {recall}");
-        assert!(recall >= 0.999)
+        assert!(recall >= minimum_recall);
+    }
+
+    #[test]
+    fn test_recall() {
+        let size = 10000;
+        let dimension = 10;
+        let mut hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
+
+        do_test_recall(&hnsw, 0.999);
+        hnsw.improve_index();
+        do_test_recall(&hnsw, 1.0);
     }
 }
