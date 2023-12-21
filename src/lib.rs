@@ -101,6 +101,12 @@ impl<C: Comparator<T>, T> Layer<C, T> {
         &self.neighbors[(n.0 * self.neighborhood_size)..((n.0 + 1) * self.neighborhood_size)]
     }
 
+    pub fn nearest_neighbors(&self, n: NodeId, number_of_nodes: usize) -> Vec<(NodeId, f32)> {
+        let v = self.get_vector(n);
+        let candidates = vec![(n, f32::MAX)];
+        self.closest_nodes(AbstractVector::Stored(v), candidates, number_of_nodes)
+    }
+
     pub fn closest_nodes(
         &self,
         v: AbstractVector<T>,
@@ -979,7 +985,6 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 }
             });
 
-        /*
         let number_of_supers_to_check = 5; // TODO make constant that is shared
 
         // unlike in initial generation, here the vectors we want to
@@ -997,10 +1002,29 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             .into_iter()
             .into_group_map_by(|(_, _, distances)| distances.first().map(|(id, _)| *id));
 
-        let mut all_distances: Vec<NodeDistances> = Vec::with_capacity(vecs.len());
+        let pseudo_layer = Layer {
+            comparator: layer.comparator.clone(),
+            neighborhood_size: layer.neighborhood_size,
+            nodes: old_nodes,
+            neighbors: old_neighbors,
+            _phantom: PhantomData,
+        };
 
         let layer_node_len = layer.nodes.len();
-        partition_groups.par_iter().for_each(|(_, partition)| {
+        let layer_count = layers_above.len() + 1;
+        let borrowed_comparator = &layer.comparator;
+
+        partition_groups.par_iter().for_each(|(sup, partition)| {
+            let sup_neighbors: NodeDistances = sup
+                .map(|sup| {
+                    let res: NodeDistances = pseudo_layer
+                        .nearest_neighbors(sup, 10 * layer.neighborhood_size)
+                        .iter()
+                        .map(|n| (NodeId(old_nodes_map[n.0 .0]), n.1))
+                        .collect();
+                    res
+                })
+                .unwrap_or_default();
             // do stuff
             partition
                 .par_iter()
@@ -1009,10 +1033,12 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                     let super_nodes: Vec<_> =
                         distances.iter().map(|(node, _)| node).cloned().collect();
 
+                    distances.extend(&sup_neighbors);
+
                     // some random, some for neighborhood
                     // TODO - also some random extra nodes on the same layer
                     let mut prng = StdRng::seed_from_u64(
-                        self.layer_count() as u64 + vector_id.0 as u64 + layer_node_len as u64,
+                        layer_count as u64 + vector_id.0 as u64 + layer_node_len as u64,
                     );
 
                     let mut partitions: Vec<_> = super_nodes
@@ -1026,28 +1052,41 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                     let partition_maxes: Vec<_> = partitions.iter().map(|p| p.len()).collect();
 
                     let choice_count =
-                        std::cmp::min(neighborhood_size * 10, partition_maxes.iter().sum());
+                        std::cmp::min(layer.neighborhood_size * 10, partition_maxes.iter().sum());
                     let partition_choices =
                         choose_n(choice_count, partition_maxes, node_id.0, &mut prng);
+
+                    for i in 0..partition_choices.len() {
+                        let partition = partitions[partition_choices[i].0];
+                        let choice = &partition[partition_choices[i].1];
+                        let distance = borrowed_comparator.compare_vec(
+                            AbstractVector::Stored(*vector_id),
+                            AbstractVector::Stored(choice.1),
+                        );
+                        distances.push((choice.0, distance));
+                    }
+                    distances.sort_by_key(|(_, d)| OrderedFloat(*d));
+                    distances.dedup();
+
+                    let mut neighbors: Vec<_> = distances
+                        .into_iter()
+                        .filter(|(n, _d)| node_id != n)
+                        .take(layer.neighborhood_size)
+                        .map(|(n, _)| n)
+                        .collect();
+                    let fill_min = layer.neighborhood_size - neighbors.len();
+                    let zero_fill = vec![NodeId(!0); fill_min];
+                    neighbors.extend(zero_fill);
+
+                    let new_neighborhood = unsafe {
+                        std::slice::from_raw_parts_mut(
+                            layer.neighbors.as_ptr().add(node_id.0) as *mut NodeId,
+                            layer.neighborhood_size,
+                        )
+                    };
+                    new_neighborhood.copy_from_slice(&neighbors);
                 });
         });
-        */
-        // calculate neighborhoods for incoming vectors
-
-        /*
-            //let extended_neighborhoods =
-            let mut new_neighborhoods = Vec::with_capacity(new_nodes.len() * self.neighborhood_size);
-            let vec_queue = vecs.clone();
-            let mut last = None;
-            for i in 0..self.nodes.len() {
-                let v = nodes[i];
-                while vec.last() > Some(v) {
-                    new_nodes.push(vec.pop().unwrap());
-                    let neighbors = vec![NodeId(!0); self.neighborhood_size];
-                    new_neighborhoods.extend(neighbors)
-                }
-        }
-            */
     }
 
     pub fn improve_index(&self) {
