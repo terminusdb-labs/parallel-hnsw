@@ -325,8 +325,125 @@ pub struct NodeDistance {
 }
 
 #[derive(PartialEq, PartialOrd, Debug)]
+pub struct HnswSearcher<C: Comparator<T>, T> {
+    _phantom: PhantomData<(C, T)>,
+}
+
+impl<C: Comparator<T>, T: Sync> Default for HnswSearcher<C, T> {
+    fn default() -> Self {
+        Self {
+            _phantom: Default::default(),
+        }
+    }
+}
+
+#[derive(PartialEq, PartialOrd, Debug)]
 pub struct Hnsw<C: Comparator<T>, T: Sync> {
     layers: Vec<Layer<C, T>>,
+    immutable: HnswSearcher<C, T>,
+}
+
+impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
+    pub fn compare_all(comparator: C, v: VectorId, vs: &[VectorId]) -> Vec<(VectorId, f32)> {
+        let mut res: Vec<_> = vs
+            .iter()
+            .filter(|w| **w != v)
+            .map(|w| {
+                (
+                    *w,
+                    comparator.compare_vec(AbstractVector::Stored(v), AbstractVector::Stored(*w)),
+                )
+            })
+            .collect();
+        res.sort_by_key(|(v, d)| (OrderedFloat(*d), *v));
+        res
+    }
+
+    pub fn entry_vector(&self) -> VectorId {
+        // Other choices are possible
+        VectorId(0)
+    }
+
+    fn generate_initial_partitions(
+        &self,
+        vs: &[VectorId],
+        nodes: &[VectorId],
+        comparator: &C,
+        number_of_supers_to_check: usize,
+        layers: &[Layer<C, T>],
+    ) -> Vec<(NodeId, VectorId, NodeDistances)> {
+        let mut initial_partitions: Vec<(NodeId, VectorId, NodeDistances)> =
+            Vec::with_capacity(vs.len());
+        vs.par_iter()
+            .enumerate()
+            .map(|(node_id, vector_id)| {
+                let comparator = comparator.clone();
+                let initial_vector_distances = if layers.len() - 1 == 0 {
+                    Self::compare_all(comparator, *vector_id, vs)
+                } else {
+                    self.initial_vector_distances(*vector_id, number_of_supers_to_check, layers)
+                };
+                let initial_node_distances: Vec<_> = initial_vector_distances
+                    .into_iter()
+                    .map(|(vector_id, distance)| {
+                        (NodeId(nodes.binary_search(&vector_id).unwrap()), distance)
+                    })
+                    .collect();
+                (NodeId(node_id), *vector_id, initial_node_distances)
+            })
+            .collect_into_vec(&mut initial_partitions);
+
+        initial_partitions.par_sort_unstable_by_key(|(_node_id, _vector_id, distances)| {
+            distances.first().map(|(_, d)| OrderedFloat(*d))
+        });
+        initial_partitions
+    }
+
+    pub fn initial_vector_distances(
+        &self,
+        v: VectorId,
+        number_of_nodes: usize,
+        layers: &[Layer<C, T>],
+    ) -> Vec<(VectorId, f32)> {
+        self.search_layers(AbstractVector::Stored(v), number_of_nodes, layers)
+            .into_iter()
+            .filter(|(w, _)| v != *w)
+            .collect::<Vec<_>>()
+    }
+
+    pub fn search_layers(
+        &self,
+        v: AbstractVector<T>,
+        number_of_candidates: usize,
+        layers: &[Layer<C, T>],
+    ) -> Vec<(VectorId, f32)> {
+        let upper_layer_candidate_count = 1;
+        let entry_vector = self.entry_vector();
+        let distance_from_entry = layers
+            .first()
+            .map(|l| {
+                l.comparator
+                    .compare_vec(v.clone(), AbstractVector::Stored(entry_vector))
+            })
+            .unwrap_or(0.0);
+        let mut candidates_queue = Vec::with_capacity(2 * number_of_candidates);
+        candidates_queue.push((entry_vector, distance_from_entry));
+        for i in 0..layers.len() {
+            let candidate_count = if i == layers.len() - 1 {
+                number_of_candidates
+            } else {
+                upper_layer_candidate_count
+            };
+            let layer = &layers[i];
+            let closest = layer.closest_vectors(v.clone(), &candidates_queue, candidate_count);
+            candidates_queue.extend(closest);
+            candidates_queue.sort_by_key(|(v, d)| (OrderedFloat(*d), *v));
+            candidates_queue.dedup();
+            // eprintln!("candidates_queue: {candidates_queue:?}");
+            candidates_queue.truncate(number_of_candidates);
+        }
+        candidates_queue
+    }
 }
 
 impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
@@ -369,55 +486,8 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         VectorId(0)
     }
 
-    pub fn initial_vector_distances(
-        &self,
-        v: VectorId,
-        number_of_nodes: usize,
-        upto: usize,
-    ) -> Vec<(VectorId, f32)> {
-        self.search_upto(AbstractVector::Stored(v), number_of_nodes, upto)
-            .into_iter()
-            .filter(|(w, _)| v != *w)
-            .collect::<Vec<_>>()
-    }
-
     pub fn layer_count(&self) -> usize {
         self.layers.len()
-    }
-
-    pub fn search_upto(
-        &self,
-        v: AbstractVector<T>,
-        number_of_candidates: usize,
-        upto: usize,
-    ) -> Vec<(VectorId, f32)> {
-        let upper_layer_candidate_count = 1;
-        let entry_vector = self.entry_vector();
-        let distance_from_entry = self
-            .layers
-            .first()
-            .map(|l| {
-                l.comparator
-                    .compare_vec(v.clone(), AbstractVector::Stored(entry_vector))
-            })
-            .unwrap_or(0.0);
-        let mut candidates_queue = Vec::with_capacity(2 * number_of_candidates);
-        candidates_queue.push((entry_vector, distance_from_entry));
-        for i in 0..upto {
-            let candidate_count = if i == upto - 1 {
-                number_of_candidates
-            } else {
-                upper_layer_candidate_count
-            };
-            let layer = &self.layers[i];
-            let closest = layer.closest_vectors(v.clone(), &candidates_queue, candidate_count);
-            candidates_queue.extend(closest);
-            candidates_queue.sort_by_key(|(v, d)| (OrderedFloat(*d), *v));
-            candidates_queue.dedup();
-            // eprintln!("candidates_queue: {candidates_queue:?}");
-            candidates_queue.truncate(number_of_candidates);
-        }
-        candidates_queue
     }
 
     pub fn search(
@@ -425,22 +495,8 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         v: AbstractVector<T>,
         number_of_candidates: usize,
     ) -> Vec<(VectorId, f32)> {
-        self.search_upto(v, number_of_candidates, self.layer_count())
-    }
-
-    pub fn compare_all(comparator: C, v: VectorId, vs: &[VectorId]) -> Vec<(VectorId, f32)> {
-        let mut res: Vec<_> = vs
-            .iter()
-            .filter(|w| **w != v)
-            .map(|w| {
-                (
-                    *w,
-                    comparator.compare_vec(AbstractVector::Stored(v), AbstractVector::Stored(*w)),
-                )
-            })
-            .collect();
-        res.sort_by_key(|(v, d)| (OrderedFloat(*d), *v));
-        res
+        self.immutable
+            .search_layers(v, number_of_candidates, &self.layers)
     }
 
     pub fn generate_layer(
@@ -453,12 +509,12 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         let number_of_supers_to_check = 5; // neighborhood_size;
 
         // 1. Calculate our node id, and find our neighborhood in the above layer
-        let initial_partitions = self.generate_initial_partitions(
+        let initial_partitions = self.immutable.generate_initial_partitions(
             &vs,
             &vs, // for initial generation, vs is all nodes
             &comparator,
             number_of_supers_to_check,
-            self.layer_count(),
+            &self.layers,
         );
 
         // 2. Partition the layer in terms of the closeness to the
@@ -589,41 +645,6 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         }
     }
 
-    fn generate_initial_partitions(
-        &self,
-        vs: &[VectorId],
-        nodes: &[VectorId],
-        comparator: &C,
-        number_of_supers_to_check: usize,
-        upto_layer: usize,
-    ) -> Vec<(NodeId, VectorId, NodeDistances)> {
-        let mut initial_partitions: Vec<(NodeId, VectorId, NodeDistances)> =
-            Vec::with_capacity(vs.len());
-        vs.par_iter()
-            .enumerate()
-            .map(|(node_id, vector_id)| {
-                let comparator = comparator.clone();
-                let initial_vector_distances = if upto_layer == 0 {
-                    Self::compare_all(comparator, *vector_id, vs)
-                } else {
-                    self.initial_vector_distances(*vector_id, number_of_supers_to_check, upto_layer)
-                };
-                let initial_node_distances: Vec<_> = initial_vector_distances
-                    .into_iter()
-                    .map(|(vector_id, distance)| {
-                        (NodeId(nodes.binary_search(&vector_id).unwrap()), distance)
-                    })
-                    .collect();
-                (NodeId(node_id), *vector_id, initial_node_distances)
-            })
-            .collect_into_vec(&mut initial_partitions);
-
-        initial_partitions.par_sort_unstable_by_key(|(_node_id, _vector_id, distances)| {
-            distances.first().map(|(_, d)| OrderedFloat(*d))
-        });
-        initial_partitions
-    }
-
     pub fn generate(
         c: C,
         vs: Vec<VectorId>,
@@ -636,7 +657,10 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         let layer_count = (total_size as f32).log(neighborhood_size as f32).ceil() as usize;
         // eprintln!("layer count: {layer_count}");
         let layers = Vec::with_capacity(layer_count);
-        let mut hnsw: Hnsw<C, T> = Hnsw { layers };
+        let mut hnsw: Hnsw<C, T> = Hnsw {
+            layers,
+            immutable: HnswSearcher::default(),
+        };
         for i in 0..layer_count {
             let level = layer_count - i - 1;
             // eprintln!("Generating level {level}");
@@ -813,7 +837,10 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                     _phantom: PhantomData,
                 });
             }
-            Ok(Some(Hnsw { layers }))
+            Ok(Some(Hnsw {
+                layers,
+                immutable: HnswSearcher::default(),
+            }))
         } else {
             Ok(None)
         }
@@ -867,8 +894,10 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
     }
 
     pub fn extend_layer(&mut self, layer_id: usize, mut vecs: Vec<VectorId>) {
-        let layer: &'static mut Layer<C, T> =
-            unsafe { &mut *(self.get_layer_from_top_mut(layer_id).unwrap() as *mut Layer<C, T>) };
+        let searcher = &self.immutable;
+        let (layers_above, layers_below) = self.layers.split_at_mut(layer_id);
+        let layers_above: &[Layer<C, T>] = layers_above;
+        let layer = &mut layers_below[0];
         /*
         1. create new vector for nodes of size nodes.len() + vecs.len()
         2. create a new neighborhood vector of size new_nodes.len() * neighborhood_size
@@ -945,12 +974,12 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         // unlike in initial generation, here the vectors we want to
         // generate partitions for, and the complete node list, are
         // different values
-        let initial_partitions = self.generate_initial_partitions(
+        let initial_partitions = searcher.generate_initial_partitions(
             &vecs,
             &layer.nodes,
             &layer.comparator,
             number_of_supers_to_check,
-            layer_id - 1,
+            layers_above,
         );
         // calculate neighborhoods for incoming vectors
 
