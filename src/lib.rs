@@ -451,7 +451,7 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
         let mut candidates_queue = Vec::with_capacity(2 * number_of_candidates);
         candidates_queue.push((entry_vector, distance_from_entry));
         for i in 0..layers.len() {
-            let candidate_count = if i == layers.len() - 1 {
+            let candidate_count = if layers.len() == 1 || i == layers.len() - 1 {
                 number_of_candidates
             } else {
                 upper_layer_candidate_count
@@ -461,12 +461,14 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
                 layer
                     .as_ref()
                     .closest_vectors(v.clone(), &candidates_queue, candidate_count);
+
             candidates_queue.extend(closest);
             candidates_queue.sort_by_key(|(v, d)| (OrderedFloat(*d), *v));
             candidates_queue.dedup();
             // eprintln!("candidates_queue: {candidates_queue:?}");
             candidates_queue.truncate(number_of_candidates);
         }
+
         candidates_queue
     }
 }
@@ -679,15 +681,14 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         let total_size = vs.len();
         // eprintln!("neighborhood_size: {neighborhood_size}");
         // eprintln!("total_size: {total_size}");
-        let layer_count = (total_size as f32).log(neighborhood_size as f32).ceil() as usize;
         // eprintln!("layer count: {layer_count}");
+        let partitions = calculate_partitions(total_size, neighborhood_size);
+        let layer_count = partitions.len();
         let layers = Vec::with_capacity(layer_count);
         let mut hnsw: Hnsw<C, T> = Hnsw {
             layers,
             immutable: HnswSearcher::default(),
         };
-        let partitions = calculate_partitions(total_size, neighborhood_size);
-        assert_eq!(partitions.len(), layer_count);
         for (i, length) in partitions.iter().enumerate() {
             let level = layer_count - i - 1;
             let slice_length = std::cmp::min(*length, total_size);
@@ -1031,6 +1032,14 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
 
         let mut pseudo_layers: Vec<&Layer<_, _>> = Vec::new();
         pseudo_layers.extend(layers_above.iter());
+        let pseudo_layer = Layer {
+            comparator: layer.comparator.clone(),
+            neighborhood_size: layer.neighborhood_size,
+            nodes: old_nodes,
+            neighbors: old_neighbors,
+            _phantom: PhantomData,
+        };
+        pseudo_layers.push(&pseudo_layer);
 
         let mut neighborhood_candidates: Vec<(NodeId, NodeId, f32)> = vecs
             .par_iter()
@@ -1046,9 +1055,6 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 distances.dedup_by_key(|(v, _)| *v);
                 distances.sort_by_key(|(v, d)| (OrderedFloat(*d), *v));
                 distances.truncate(layer.neighborhood_size);
-                if v.0 == 7913 {
-                    eprintln!("7913 constructed neighborhood {distances:?}");
-                }
                 let neighborhood_distances: Vec<(NodeId, f32)> = distances
                     .into_iter()
                     .map(|(w, d)| (layer.get_node(w).unwrap(), d))
@@ -1056,6 +1062,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 let mut neighborhood: Vec<NodeId> =
                     neighborhood_distances.iter().map(|(n, _)| *n).collect();
                 neighborhood.resize(layer.neighborhood_size, NodeId(!0));
+
                 // Write neighborhood directly here!
                 let our_node = layer.get_node(*v).unwrap();
                 let new_neighborhood = unsafe {
@@ -1081,9 +1088,6 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             .into_iter()
             .into_group_map_by(|(n, _, _)| *n);
 
-        let node_for_vector_7913 = layer.get_node(VectorId(7913));
-        eprintln!("vector 7913 is {node_for_vector_7913:?}");
-
         final_groups.into_par_iter().for_each(|(node, group)| {
             // 1. find all distances to existing neighbors for this node
             let neighborhood = unsafe {
@@ -1101,9 +1105,6 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                     AbstractVector::Stored(layer.get_vector(node)),
                     AbstractVector::Stored(layer.get_vector(*neighbor)),
                 );
-                if Some(*neighbor) == node_for_vector_7913 {
-                    eprintln!("potentially connecting node {node:?} with distance {distance}");
-                }
 
                 distances.push((*neighbor, distance));
             }
@@ -1114,12 +1115,6 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             // 3. sort, truncate.
             distances.sort_by_key(|(n, distance)| (OrderedFloat(*distance), *n));
             distances.truncate(layer.neighborhood_size);
-            if distances
-                .iter()
-                .any(|(n, _)| Some(*n) == node_for_vector_7913)
-            {
-                eprintln!("node for vec 7913 ended up in neighborhood for node {node:?}");
-            }
 
             // 4. write back new neighbor list.
             let mut new_neighborhood: Vec<_> = distances.into_iter().map(|(n, _)| n).collect();
@@ -1218,9 +1213,10 @@ fn choose_n(
     set.into_iter().collect()
 }
 
-fn calculate_partitions(total_size: usize, order: usize) -> Vec<usize> {
+fn calculate_partitions(total_size: usize, neighborhood_size: usize) -> Vec<usize> {
     let mut partitions: Vec<usize> = vec![];
     let mut size = total_size;
+    let order = neighborhood_size * 2;
     let layer_count = (total_size as f32).log(order as f32).ceil() as usize;
     for _ in 0..layer_count {
         partitions.push(size);
@@ -1533,7 +1529,7 @@ mod tests {
             eprintln!("Searching for {i}");
             */
             let v = AbstractVector::Unstored(datum);
-            let results = hnsw.search(v, 100);
+            let results = hnsw.search(v, 500);
             if VectorId(i) == results[0].0 {
                 total_relevant += 1;
             } else {
@@ -1595,12 +1591,16 @@ mod tests {
         //eprintln!("Top nodes: {:?}", hnsw.layers[0].nodes);
         //eprintln!("Top neighbors: {:?}", hnsw.layers[0].neighbors);
         hnsw.improve_index();
-
         //eprintln!("usize max: {}", !0_usize);
         //eprintln!("Top nodes after: {:?}", hnsw.layers[0].nodes);
-        //eprintln!("Top neighbors after: {:?}", hnsw.layers[0].neighbors);
-
+        /*
+        let v = 9817;
+        let n = hnsw.layers[0].get_node(VectorId(v)).unwrap();
+        let neighbors = &hnsw.layers[0].neighbors[n.0..hnsw.layers[0].neighborhood_size];
+        eprintln!("neighbors for {v} after: {:?}", neighbors);
+        */
         do_test_recall(&hnsw, 1.0);
+        panic!();
     }
 
     #[test]
