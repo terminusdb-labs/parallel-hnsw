@@ -287,10 +287,6 @@ impl<C: Comparator<T>, T> Layer<C, T> {
             .map(|(ix, d)| (NodeId(ix), d.index_sum, d.hops))
             .collect();
         bottom_distances.sort_by_key(|(n, d, h)| (usize::MAX - d, usize::MAX - h, *n));
-        eprintln!(
-            "bottom distances {:?}",
-            bottom_distances.iter().take(10).collect::<Vec<_>>()
-        );
 
         let unreachables: usize = bottom_distances
             .iter()
@@ -1103,6 +1099,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             }
             // 3. sort, truncate.
             distances.sort_by_key(|(n, distance)| (OrderedFloat(*distance), *n));
+            distances.dedup();
             distances.truncate(layer.neighborhood_size);
 
             // 4. write back new neighbor list.
