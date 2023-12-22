@@ -407,7 +407,7 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
             .map(|vector_id| {
                 let comparator = comparator.clone();
                 let initial_vector_distances = if layers.is_empty() {
-                    Self::compare_all(comparator, *vector_id, vs)
+                    Self::compare_all(comparator, *vector_id, nodes)
                 } else {
                     self.initial_vector_distances(*vector_id, number_of_supers_to_check, layers)
                 };
@@ -417,6 +417,8 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
                         (NodeId(nodes.binary_search(&vector_id).unwrap()), distance)
                     })
                     .collect();
+                // TODO! this is extremely expensive on initial build,
+                // and unnecessary, nodeid can come from an enumeration
                 (
                     NodeId(nodes.binary_search(vector_id).unwrap()),
                     *vector_id,
@@ -1074,6 +1076,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 partition
                     .par_iter()
                     .flat_map(|(node_id, vector_id, distances)| {
+                        eprintln!("Incoming distances: {distances:?}");
                         let mut distances = distances.clone();
                         let super_nodes: Vec<_> =
                             distances.iter().map(|(node, _)| node).cloned().collect();
@@ -1119,13 +1122,14 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                             .filter(|(n, _d)| node_id != n)
                             .take(layer.neighborhood_size)
                             .collect();
-
+                        eprintln!("distances after calculation: {distances:?}");
                         let mut neighbors: Vec<_> = distances.iter().map(|(n, _)| *n).collect();
                         let fill_min = layer.neighborhood_size - neighbors.len();
                         let zero_fill = vec![NodeId(!0); fill_min];
                         neighbors.extend(zero_fill);
                         eprintln!("neighbors after calculation: {neighbors:?}");
                         assert_eq!(neighbors.len(), layer.neighborhood_size);
+
                         let new_neighborhood = unsafe {
                             std::slice::from_raw_parts_mut(
                                 layer
@@ -1357,6 +1361,31 @@ mod tests {
         hnsw
     }
 
+    fn make_broken_hnsw() -> Hnsw<SillyComparator, SillyVec> {
+        let sqrt2_recip = std::f32::consts::FRAC_1_SQRT_2;
+        let data: Vec<SillyVec> = vec![
+            [1.0, 0.0, 0.0],                 // 0
+            [0.0, 1.0, 0.0],                 // 1
+            [0.0, 0.0, 1.0],                 // 2
+            [sqrt2_recip, sqrt2_recip, 0.0], // 3
+            [0.5773, 0.5773, 0.5773],        // 4
+            [-1.0, 0.0, 0.0],                // 5
+            [0.0, -1.0, 0.0],                // 6
+            [0.0, 0.0, -1.0],                // 7
+            [0.0, sqrt2_recip, sqrt2_recip], // 8
+            [sqrt2_recip, 0.0, sqrt2_recip], // 9
+        ];
+        let c = SillyComparator { data: data.clone() };
+        let vs: Vec<_> = (0..9).map(VectorId).collect(); // only index 8 first..
+
+        let mut hnsw: Hnsw<SillyComparator, SillyVec> = Hnsw::generate(c, vs, 3, 6);
+        let bottom = &mut hnsw.layers[1];
+        // add a ninth disconnected vector
+        bottom.nodes.push(VectorId(9));
+        bottom.neighbors.extend(vec![NodeId(!0); 6]);
+        hnsw
+    }
+
     type BigVec = Vec<f32>;
     #[derive(Clone, Debug, PartialEq)]
     struct BigComparator {
@@ -1411,8 +1440,9 @@ mod tests {
             .collect();
         let c = BigComparator { data };
         let vs: Vec<_> = (0..count).map(VectorId).collect();
-
-        let hnsw: Hnsw<BigComparator, BigVec> = Hnsw::generate(c, vs, 24, 48);
+        let m = 24;
+        let m0 = 48;
+        let hnsw: Hnsw<BigComparator, BigVec> = Hnsw::generate(c, vs, m, m0);
         hnsw
     }
 
@@ -1624,6 +1654,18 @@ mod tests {
             "One from bottom after: {:?}",
             hnsw.layers[hnsw.layer_count() - 2]
         );
+        let data = &hnsw.layers[hnsw.layer_count() - 1].comparator.data;
+        for (i, datum) in data.iter().enumerate() {
+            let v = AbstractVector::Unstored(datum);
+            let results = hnsw.search(v, 9);
+            assert_eq!(VectorId(i), results[0].0)
+        }
+    }
+
+    #[test]
+    fn test_tiny_index_improvement() {
+        let mut hnsw: Hnsw<SillyComparator, SillyVec> = make_broken_hnsw();
+        hnsw.improve_index();
         let data = &hnsw.layers[hnsw.layer_count() - 1].comparator.data;
         for (i, datum) in data.iter().enumerate() {
             let v = AbstractVector::Unstored(datum);
