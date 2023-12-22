@@ -94,6 +94,10 @@ impl<C: Comparator<T>, T> Layer<C, T> {
     }
 
     fn get_vector(&self, n: NodeId) -> VectorId {
+        if n.0 > self.nodes.len() {
+            eprintln!("nodes: {:?}", self.nodes);
+            eprintln!("neighborhood: {:?}", self.neighbors);
+        }
         self.nodes[n.0]
     }
 
@@ -273,11 +277,12 @@ impl<C: Comparator<T>, T> Layer<C, T> {
     pub fn discover_nodes_to_promote(&self, supers: &[VectorId]) -> Vec<NodeId> {
         let bottom_distances: Vec<NodeDistance> = self.node_distances(supers);
 
-        let bottom_distances: Vec<(NodeId, usize)> = bottom_distances
+        let mut bottom_distances: Vec<(NodeId, usize)> = bottom_distances
             .into_iter()
             .enumerate()
             .map(|(ix, d)| (NodeId(ix), d.index_sum))
             .collect();
+        bottom_distances.sort_by_key(|(_, d)| usize::MAX - d);
 
         let unreachables: Vec<NodeId> = bottom_distances
             .iter()
@@ -308,7 +313,6 @@ impl<C: Comparator<T>, T> Layer<C, T> {
             }
         }
         // TODO! Use buget to increase this with the tail from bottom_distances
-        eprintln!("nodes to promote {:?}", &nodes_to_promote);
         let budget = self.node_count() / 100;
         let tail_length = budget.saturating_sub(nodes_to_promote.len());
         nodes_to_promote.extend(
@@ -318,6 +322,10 @@ impl<C: Comparator<T>, T> Layer<C, T> {
                 .skip(unreachables.len())
                 .take(tail_length),
         );
+        //let worst: Vec<_> = bottom_distances.iter().take(50).collect();
+        //eprintln!("nodes to promote {:?}", &nodes_to_promote);
+        //eprintln!("worst {:?}", &worst);
+
         nodes_to_promote
     }
 }
@@ -396,8 +404,7 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
         let mut initial_partitions: Vec<(NodeId, VectorId, NodeDistances)> =
             Vec::with_capacity(vs.len());
         vs.par_iter()
-            .enumerate()
-            .map(|(node_id, vector_id)| {
+            .map(|vector_id| {
                 let comparator = comparator.clone();
                 let initial_vector_distances = if layers.is_empty() {
                     Self::compare_all(comparator, *vector_id, vs)
@@ -410,7 +417,11 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
                         (NodeId(nodes.binary_search(&vector_id).unwrap()), distance)
                     })
                     .collect();
-                (NodeId(node_id), *vector_id, initial_node_distances)
+                (
+                    NodeId(nodes.binary_search(vector_id).unwrap()),
+                    *vector_id,
+                    initial_node_distances,
+                )
             })
             .collect_into_vec(&mut initial_partitions);
 
@@ -881,16 +892,16 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
     }
 
     pub fn supers_for_layer(&self, layer_id: usize) -> &[VectorId] {
-        if layer_id == 0 {
-            let layer = self.get_layer_from_top(layer_id).unwrap();
+        if self.layer_count() == layer_id + 1 {
+            let layer = self.get_layer(layer_id).unwrap();
             &layer.nodes[0..1]
         } else {
-            &self.get_layer_from_top(layer_id - 1).unwrap().nodes[..]
+            &self.get_layer(layer_id + 1).unwrap().nodes[..]
         }
     }
 
     pub fn node_distances_for_layer(&self, layer_id: usize) -> Vec<NodeDistance> {
-        let layer = self.get_layer_from_top(layer_id).unwrap();
+        let layer = self.get_layer(layer_id).unwrap();
         let supers = self.supers_for_layer(layer_id);
         layer.node_distances(supers)
     }
@@ -906,7 +917,8 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
     }
 
     pub fn discover_vectors_to_promote(&self, layer_id: usize) -> Vec<VectorId> {
-        self.get_layer_from_top(layer_id)
+        // We need to start with layer zero and proceed upwards
+        self.get_layer(layer_id)
             .map(|layer| {
                 let supers = self.supers_for_layer(layer_id);
                 layer
@@ -919,18 +931,19 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
     }
 
     pub fn extend_layer(&mut self, layer_id: usize, mut vecs: Vec<VectorId>) {
+        let layer_id_from_top = self.layer_count() - layer_id - 1;
+        eprintln!("Extending layer: {layer_id:?}");
+        eprintln!("Counting as {layer_id_from_top:?}");
         let searcher = &self.immutable;
-        let (layers_above, layers_below) = self.layers.split_at_mut(layer_id);
+        let (layers_above, layers_below) = self.layers.split_at_mut(layer_id_from_top);
+        eprintln!(
+            "layers above: {}, layers_below: {}",
+            layers_above.len(),
+            layers_below.len()
+        );
         let layers_above: &[Layer<C, T>] = layers_above;
         let layer = &mut layers_below[0];
-        /*
-        1. create new vector for nodes of size nodes.len() + vecs.len()
-        2. create a new neighborhood vector of size new_nodes.len() * neighborhood_size
-        3. Sort vecs, and walk through nodes with vecs, copying whichever is least
-        4. Continue with neighborhoods in the same fashion
-        5. Calculate the neighborhoods for vecs
-        6. Write into neighborhoods
-         */
+
         vecs.sort();
         // this will be swapped out for the current nodes, therefore the variable name
         let mut old_nodes = Vec::with_capacity(vecs.len() + layer.nodes.len());
@@ -940,6 +953,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         let mut new_nodes_iter = vecs.iter().peekable();
         let mut old_nodes_map = Vec::with_capacity(old_nodes.len());
         let mut new_nodes_map = Vec::with_capacity(vecs.len());
+        let mut vecs: Vec<VectorId> = Vec::with_capacity(vecs.len());
         loop {
             let old_nodes_next = old_nodes_iter.peek();
             let new_nodes_next = new_nodes_iter.peek();
@@ -949,15 +963,17 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                     layer.nodes.push(*old_nodes_iter.next().unwrap());
                     old_nodes_map.push(layer.nodes.len() - 1);
                 }
-                (None, Some(_)) => {
+                (None, Some(v)) => {
+                    vecs.push(**v);
                     layer.nodes.push(*new_nodes_iter.next().unwrap());
                     new_nodes_map.push(layer.nodes.len() - 1);
                 }
                 (Some(old), Some(new)) => {
-                    if old < new {
+                    if old <= new {
                         layer.nodes.push(*old_nodes_iter.next().unwrap());
                         old_nodes_map.push(layer.nodes.len() - 1);
                     } else {
+                        vecs.push(**new);
                         layer.nodes.push(*new_nodes_iter.next().unwrap());
                         new_nodes_map.push(layer.nodes.len() - 1);
                     }
@@ -1018,7 +1034,8 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         let partition_groups = initial_partitions
             .into_iter()
             .into_group_map_by(|(_, _, distances)| distances.first().map(|(id, _)| *id));
-
+        eprintln!("partition groups: {partition_groups:?}");
+        eprintln!("against nodes: {:?}", old_nodes);
         let pseudo_layer = Layer {
             comparator: layer.comparator.clone(),
             neighborhood_size: layer.neighborhood_size,
@@ -1030,16 +1047,25 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         let layer_node_len = layer.nodes.len();
         let layer_count = layers_above.len() + 1;
         let borrowed_comparator = &layer.comparator;
+        let mut pseudo_layers: Vec<&Layer<_, _>> = Vec::new();
+        pseudo_layers.extend(layers_above.iter());
+        pseudo_layers.push(&pseudo_layer);
 
-        let foo: Vec<_> = partition_groups
+        let neighborhood_candidates_collection: Vec<_> = partition_groups
             .par_iter()
             .map(|(sup, partition)| {
                 let sup_neighbors: NodeDistances = sup
                     .map(|sup| {
-                        let res: NodeDistances = pseudo_layer
-                            .nearest_neighbors(sup, 10 * layer.neighborhood_size)
+                        eprintln!("Looking up {sup:?}");
+                        let vec = layer.get_vector(sup);
+                        let res: NodeDistances = searcher
+                            .search_layers(
+                                AbstractVector::Stored(vec),
+                                10 * layer.neighborhood_size,
+                                &pseudo_layers,
+                            )
                             .iter()
-                            .map(|n| (NodeId(old_nodes_map[n.0 .0]), n.1))
+                            .map(|n| (pseudo_layer.get_node(n.0).unwrap(), n.1))
                             .collect();
                         res
                     })
@@ -1098,7 +1124,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                         let fill_min = layer.neighborhood_size - neighbors.len();
                         let zero_fill = vec![NodeId(!0); fill_min];
                         neighbors.extend(zero_fill);
-
+                        eprintln!("neighbors after calculation: {neighbors:?}");
                         assert_eq!(neighbors.len(), layer.neighborhood_size);
                         let new_neighborhood = unsafe {
                             std::slice::from_raw_parts_mut(
@@ -1120,9 +1146,14 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             })
             .collect();
 
-        let mut foo2: Vec<_> = foo.into_iter().flatten().collect();
-        foo2.par_sort_unstable_by_key(|(n, _, _)| *n);
-        let final_groups = foo2.into_iter().into_group_map_by(|(n, _, _)| *n);
+        let mut neighborhood_candidates: Vec<_> = neighborhood_candidates_collection
+            .into_iter()
+            .flatten()
+            .collect();
+        neighborhood_candidates.par_sort_unstable_by_key(|(n, _, _)| *n);
+        let final_groups = neighborhood_candidates
+            .into_iter()
+            .into_group_map_by(|(n, _, _)| *n);
 
         final_groups.into_par_iter().for_each(|(node, group)| {
             // 1. find all distances to existing neighbors for this node
@@ -1154,15 +1185,20 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             distances.truncate(layer.neighborhood_size);
 
             // 4. write back new neighbor list.
-            let new_neighborhood: Vec<_> = distances.into_iter().map(|(n, _)| n).collect();
+            let mut new_neighborhood: Vec<_> = distances.into_iter().map(|(n, _)| n).collect();
+            let fill_min = layer.neighborhood_size - new_neighborhood.len();
+            let zero_fill = vec![NodeId(!0); fill_min];
+            new_neighborhood.extend(zero_fill);
+
             neighborhood.copy_from_slice(&new_neighborhood)
         });
     }
 
     pub fn improve_index(&mut self) {
-        for layer_id in 0..self.layer_count() {
+        for layer_id in 0..self.layer_count() - 1 {
             let vecs = self.discover_vectors_to_promote(layer_id);
-            self.extend_layer(layer_id, vecs)
+            eprintln!("Vectors to promote: {vecs:?}");
+            self.extend_layer(layer_id + 1, vecs)
         }
     }
 }
@@ -1387,7 +1423,19 @@ mod tests {
         let slice = &[0.0, sqrt2_recip, sqrt2_recip];
         let search_vector = AbstractVector::Unstored(slice);
         let results = hnsw.search(search_vector, 9);
-        assert_eq!(results, vec![])
+        assert_eq!(
+            results,
+            vec![
+                (VectorId(8), 5.9604645e-8),
+                (VectorId(4), 0.1835745),
+                (VectorId(1), 0.29289323),
+                (VectorId(2), 0.29289323),
+                (VectorId(3), 0.5),
+                (VectorId(0), 1.0),
+                (VectorId(5), 1.0),
+                (VectorId(7), 1.7071068)
+            ]
+        )
     }
 
     #[test]
@@ -1556,15 +1604,31 @@ mod tests {
         let mut hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
 
         do_test_recall(&hnsw, 0.999);
+        eprintln!("Top nodes: {:?}", hnsw.layers[0].nodes);
+        eprintln!("Top neighbors: {:?}", hnsw.layers[0].neighbors);
         hnsw.improve_index();
 
-        let layer = hnsw.get_layer_from_top(0).unwrap();
-        let nodes = &layer.nodes;
-        let neighbors = &layer.neighbors;
-        eprintln!("Layer 0");
-        eprintln!("nodes: {nodes:?}");
-        eprintln!("neighbors: {neighbors:?}");
         eprintln!("usize max: {}", !0_usize);
+        eprintln!("Top nodes after: {:?}", hnsw.layers[0].nodes);
+        eprintln!("Top neighbors after: {:?}", hnsw.layers[0].neighbors);
+
         do_test_recall(&hnsw, 1.0);
+    }
+
+    #[test]
+    fn test_small_index_improvement() {
+        let mut hnsw: Hnsw<SillyComparator, SillyVec> = make_simple_hnsw();
+        eprintln!("One from bottom: {:?}", hnsw.layers[hnsw.layer_count() - 2]);
+        hnsw.improve_index();
+        eprintln!(
+            "One from bottom after: {:?}",
+            hnsw.layers[hnsw.layer_count() - 2]
+        );
+        let data = &hnsw.layers[hnsw.layer_count() - 1].comparator.data;
+        for (i, datum) in data.iter().enumerate() {
+            let v = AbstractVector::Unstored(datum);
+            let results = hnsw.search(v, 9);
+            assert_eq!(VectorId(i), results[0].0)
+        }
     }
 }
