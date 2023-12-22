@@ -149,7 +149,7 @@ impl<C: Comparator<T>, T> Layer<C, T> {
             );
 
             result.extend(neighbor_distances);
-            result.sort_by_key(|(_, distance)| OrderedFloat(*distance));
+            result.sort_by_key(|(n, distance)| (OrderedFloat(*distance), *n));
             // eprintln!("number of nodes {number_of_nodes}");
             // eprintln!("previous worst: {worst:?}");
             // eprintln!("worst result {:?}", result.last().cloned());
@@ -161,7 +161,7 @@ impl<C: Comparator<T>, T> Layer<C, T> {
                 break;
             }
             // Sort in reverse order
-            visit_queue.sort_by_key(|(_, distance)| OrderedFloat(-*distance))
+            visit_queue.sort_by_key(|(n, distance)| (OrderedFloat(-*distance), *n))
         }
         // eprintln!("final result: {result:?}");
         result
@@ -204,21 +204,23 @@ impl<C: Comparator<T>, T> Layer<C, T> {
         let mut generation = 0;
         loop {
             visit_queue = visit_queue
-                .into_par_iter()
+                .into_iter()
                 .flat_map(|node| {
                     let AtomicNodeDistance {
                         hops,
                         index_sum: distance,
                     } = &result[node.0];
-                    if hops
-                        .compare_exchange(
-                            usize::MAX,
-                            generation,
-                            atomic::Ordering::Relaxed,
-                            atomic::Ordering::Relaxed,
-                        )
-                        .is_ok()
-                    {
+                    let swap_result = hops.compare_exchange(
+                        usize::MAX,
+                        generation,
+                        atomic::Ordering::Relaxed,
+                        atomic::Ordering::Relaxed,
+                    );
+                    let value_after_swap = match swap_result.as_ref() {
+                        Ok(_) => generation,
+                        Err(v) => *v,
+                    };
+                    if value_after_swap == generation {
                         let neighbors = self.get_neighbors(node);
                         for (ix, neighbor) in
                             neighbors.iter().enumerate().filter(|(_, n)| n.0 != !0)
@@ -234,11 +236,13 @@ impl<C: Comparator<T>, T> Layer<C, T> {
                                 .unwrap();
                         }
 
-                        rayon::iter::Either::Left(
-                            neighbors.into_par_iter().cloned().filter(|n| n.0 != !0),
-                        )
+                        if swap_result.is_ok() {
+                            itertools::Either::Left(neighbors.iter().cloned().filter(|n| n.0 != !0))
+                        } else {
+                            itertools::Either::Right(std::iter::empty())
+                        }
                     } else {
-                        rayon::iter::Either::Right(rayon::iter::empty())
+                        itertools::Either::Right(std::iter::empty())
                     }
                 })
                 .collect();
@@ -277,52 +281,34 @@ impl<C: Comparator<T>, T> Layer<C, T> {
     pub fn discover_nodes_to_promote(&self, supers: &[VectorId]) -> Vec<NodeId> {
         let bottom_distances: Vec<NodeDistance> = self.node_distances(supers);
 
-        let mut bottom_distances: Vec<(NodeId, usize)> = bottom_distances
+        let mut bottom_distances: Vec<(NodeId, usize, usize)> = bottom_distances
             .into_iter()
             .enumerate()
-            .map(|(ix, d)| (NodeId(ix), d.index_sum))
+            .map(|(ix, d)| (NodeId(ix), d.index_sum, d.hops))
             .collect();
-        bottom_distances.sort_by_key(|(_, d)| usize::MAX - d);
+        bottom_distances.sort_by_key(|(n, d, h)| (usize::MAX - d, usize::MAX - h, *n));
+        eprintln!(
+            "bottom distances {:?}",
+            bottom_distances.iter().take(10).collect::<Vec<_>>()
+        );
 
-        let mut unreachables: Vec<NodeId> = bottom_distances
+        let unreachables: usize = bottom_distances
             .iter()
-            .take_while(|(_, d)| *d == !0)
-            .map(|(n, _)| *n)
-            .collect();
+            .take_while(|(_, _, d)| *d == !0)
+            .count();
 
-        let mut clusters: Vec<(NodeId, Vec<(NodeId, usize)>)> = unreachables
-            .par_iter()
-            .map(|node| (*node, self.reachables_from(*node, &unreachables[..])))
-            .collect();
-
-        clusters.sort_by_key(|c| usize::MAX - c.1.len());
-
-        let mut cluster_queue: Vec<_> = clusters.iter().map(Some).collect();
-        cluster_queue.reverse();
-        let mut nodes_to_promote: Vec<NodeId> = Vec::new();
-        while let Some(next) = cluster_queue.pop() {
-            if let Some((nodeid, _)) = next {
-                nodes_to_promote.push(*nodeid);
-                for other in cluster_queue.iter_mut() {
-                    if let Some((_, other_distances)) = other {
-                        if other_distances.iter().any(|(n, _)| nodeid == n) {
-                            *other = None
-                        }
-                    }
-                }
-            }
-        }
         // TODO! Use buget to increase this with the tail from bottom_distances
         let budget = self.node_count() / 100;
         eprintln!("budget for layer: {budget}");
-        let tail_length = budget.saturating_sub(unreachables.len());
-        eprintln!("promoting {tail_length} vectors");
-        unreachables.extend(bottom_distances.iter().map(|(n, _)| n).take(tail_length));
-        //let worst: Vec<_> = bottom_distances.iter().take(50).collect();
-        //eprintln!("nodes to promote {:?}", &nodes_to_promote);
-        //eprintln!("worst {:?}", &worst);
+        let tail_length = budget.saturating_sub(unreachables);
+        let total = unreachables + tail_length;
 
-        unreachables
+        eprintln!("promoting {total} vectors ({unreachables} fully unreachable, and {tail_length} less-than-reachables)");
+        bottom_distances
+            .into_iter()
+            .map(|(n, _, _)| n)
+            .take(total)
+            .collect()
     }
 }
 
@@ -344,6 +330,7 @@ impl AtomicNodeDistance {
     }
 }
 
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug, Hash)]
 pub struct NodeDistance {
     pub hops: usize,
     pub index_sum: usize,
@@ -423,8 +410,12 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
             })
             .collect_into_vec(&mut initial_partitions);
 
-        initial_partitions.par_sort_unstable_by_key(|(_node_id, _vector_id, distances)| {
-            distances.first().map(|(_, d)| OrderedFloat(*d))
+        initial_partitions.par_sort_by_key(|(node_id, vector_id, distances)| {
+            (
+                distances.first().map(|(n, d)| (OrderedFloat(*d), *n)),
+                *node_id,
+                *vector_id,
+            )
         });
         initial_partitions
     }
@@ -632,7 +623,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                     .map(move |(neighbor, distance)| (*neighbor, node, OrderedFloat(*distance)))
             })
             .collect();
-        neighbor_candidates.par_sort_unstable();
+        neighbor_candidates.par_sort();
         let neighbor_of_neighbor_partitions = neighbor_candidates
             .into_iter()
             .into_group_map_by(|(node, _, _)| *node);
@@ -1022,15 +1013,15 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             .map(|v| {
                 let distances: Vec<(VectorId, f32)> = vecs
                     .par_iter()
-                    .map(|w| {
+                    .flat_map(|w| {
                         if w == v {
-                            (*v, 0.0)
+                            None
                         } else {
                             let distance = borrowed_comparator.compare_vec(
                                 AbstractVector::Stored(*w),
                                 AbstractVector::Stored(*v),
                             );
-                            (*v, distance)
+                            Some((*w, distance))
                         }
                     })
                     .collect();
@@ -1051,8 +1042,13 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 );
                 let cross_results = cross_compare.get(v).unwrap();
                 distances.extend(cross_results);
-                distances.sort_by_key(|(_, d)| OrderedFloat(*d));
+                distances.sort_by_key(|(v, d)| (*v, OrderedFloat(*d)));
+                distances.dedup_by_key(|(v, _)| *v);
+                distances.sort_by_key(|(v, d)| (OrderedFloat(*d), *v));
                 distances.truncate(layer.neighborhood_size);
+                if v.0 == 7913 {
+                    eprintln!("7913 constructed neighborhood {distances:?}");
+                }
                 let neighborhood_distances: Vec<(NodeId, f32)> = distances
                     .into_iter()
                     .map(|(w, d)| (layer.get_node(w).unwrap(), d))
@@ -1080,10 +1076,13 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             })
             .collect();
 
-        neighborhood_candidates.par_sort_unstable_by_key(|(n, _, _)| *n);
+        neighborhood_candidates.par_sort_by_key(|(n1, n2, d)| (*n1, *n2, OrderedFloat(*d)));
         let final_groups = neighborhood_candidates
             .into_iter()
             .into_group_map_by(|(n, _, _)| *n);
+
+        let node_for_vector_7913 = layer.get_node(VectorId(7913));
+        eprintln!("vector 7913 is {node_for_vector_7913:?}");
 
         final_groups.into_par_iter().for_each(|(node, group)| {
             // 1. find all distances to existing neighbors for this node
@@ -1098,21 +1097,29 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             };
             let mut distances: NodeDistances = Vec::new();
             for neighbor in neighborhood.iter().take_while(|n| n.0 != !0) {
-                distances.push((
-                    *neighbor,
-                    layer.comparator.compare_vec(
-                        AbstractVector::Stored(layer.get_vector(node)),
-                        AbstractVector::Stored(layer.get_vector(*neighbor)),
-                    ),
-                ));
+                let distance = layer.comparator.compare_vec(
+                    AbstractVector::Stored(layer.get_vector(node)),
+                    AbstractVector::Stored(layer.get_vector(*neighbor)),
+                );
+                if Some(*neighbor) == node_for_vector_7913 {
+                    eprintln!("potentially connecting node {node:?} with distance {distance}");
+                }
+
+                distances.push((*neighbor, distance));
             }
             // 2. add the new distances that we got in 'group'
             for (_, neighbor, distance) in group {
                 distances.push((neighbor, distance));
             }
-            // 3. sort, dedup, truncate.
-            distances.sort_by_key(|(_, distance)| OrderedFloat(*distance));
+            // 3. sort, truncate.
+            distances.sort_by_key(|(n, distance)| (OrderedFloat(*distance), *n));
             distances.truncate(layer.neighborhood_size);
+            if distances
+                .iter()
+                .any(|(n, _)| Some(*n) == node_for_vector_7913)
+            {
+                eprintln!("node for vec 7913 ended up in neighborhood for node {node:?}");
+            }
 
             // 4. write back new neighbor list.
             let mut new_neighborhood: Vec<_> = distances.into_iter().map(|(n, _)| n).collect();
@@ -1530,6 +1537,7 @@ mod tests {
             if VectorId(i) == results[0].0 {
                 total_relevant += 1;
             } else {
+                eprintln!("did not find vector {i}");
                 /*
                 let layer = hnsw.get_layer(0).unwrap();
 
@@ -1555,6 +1563,28 @@ mod tests {
         assert!(recall >= minimum_recall);
     }
 
+    #[test]
+    fn test_bla() {
+        let size = 10000;
+        let dimension = 10;
+        let mut hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
+        //eprintln!("Top neighbors: {:?}", hnsw.layers[0].neighbors);
+        let supers_1 = hnsw.supers_for_layer(0);
+        let supers_2 = hnsw.supers_for_layer(0);
+        assert_eq!(supers_1, supers_2);
+        let layer = hnsw.get_layer(0).unwrap();
+        let node_distances1 = layer.node_distances(supers_1);
+        let node_distances2 = layer.node_distances(supers_1);
+        assert_eq!(node_distances1, node_distances2);
+        let n1 = layer.discover_nodes_to_promote(supers_1);
+        let n2 = layer.discover_nodes_to_promote(supers_1);
+        assert_eq!(n1, n2);
+        let v1 = hnsw.discover_vectors_to_promote(0);
+        eprintln!("{v1:?}");
+        let v2 = hnsw.discover_vectors_to_promote(0);
+        assert_eq!(v1, v2);
+        panic!();
+    }
     #[test]
     fn test_recall() {
         let size = 10000;
