@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::OpenOptions,
     io,
     marker::PhantomData,
@@ -1053,35 +1053,38 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         pseudo_layers.extend(layers_above.iter());
         pseudo_layers.push(&pseudo_layer);
 
+        let sup_neighbors: HashMap<Option<NodeId>, Vec<(NodeId, VectorId)>> = partition_groups
+            .par_iter()
+            .map(|(sup, _)| {
+                sup.map(|sup| {
+                    eprintln!("Looking up {sup:?}");
+                    let vec = layer.get_vector(sup);
+                    let res: Vec<(NodeId, VectorId)> = searcher
+                        .search_layers(
+                            AbstractVector::Stored(vec),
+                            10 * layer.neighborhood_size,
+                            &pseudo_layers,
+                        )
+                        .iter()
+                        .map(|(v, _)| (layer.get_node(*v).unwrap(), *v))
+                        .collect();
+                    (Some(sup), res)
+                })
+                .unwrap_or_default()
+            })
+            .collect();
+
         let neighborhood_candidates_collection: Vec<_> = partition_groups
             .par_iter()
             .map(|(sup, partition)| {
-                let sup_neighbors: NodeDistances = sup
-                    .map(|sup| {
-                        eprintln!("Looking up {sup:?}");
-                        let vec = layer.get_vector(sup);
-                        let res: NodeDistances = searcher
-                            .search_layers(
-                                AbstractVector::Stored(vec),
-                                10 * layer.neighborhood_size,
-                                &pseudo_layers,
-                            )
-                            .iter()
-                            .map(|n| (pseudo_layer.get_node(n.0).unwrap(), n.1))
-                            .collect();
-                        res
-                    })
-                    .unwrap_or_default();
                 // do stuff
                 partition
                     .par_iter()
                     .flat_map(|(node_id, vector_id, distances)| {
-                        eprintln!("Incoming distances: {distances:?}");
+                        eprintln!("Incoming distances for {vector_id:?}: {distances:?}");
                         let mut distances = distances.clone();
                         let super_nodes: Vec<_> =
                             distances.iter().map(|(node, _)| node).cloned().collect();
-
-                        distances.extend(&sup_neighbors);
 
                         // some random, some for neighborhood
                         // TODO - also some random extra nodes on the same layer
@@ -1091,13 +1094,26 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
 
                         let mut partitions: Vec<_> = super_nodes
                             .into_iter()
-                            .filter_map(|n| partition_groups.get(&Some(n)))
+                            .filter_map(|n| {
+                                let vec_partition = partition_groups.get(&Some(n));
+                                let sup_neighbor_partition = sup_neighbors.get(sup);
+                                if vec_partition.is_none() && sup_neighbor_partition.is_none() {
+                                    None
+                                } else {
+                                    Some((vec_partition, sup_neighbor_partition))
+                                }
+                            })
                             .collect();
                         if partitions.is_empty() {
                             // probably we're in the top layer. best add ourselves.
-                            partitions.push(partition);
+                            partitions.push((Some(partition), sup_neighbors.get(&None)));
                         }
-                        let partition_maxes: Vec<_> = partitions.iter().map(|p| p.len()).collect();
+                        let partition_maxes: Vec<_> = partitions
+                            .iter()
+                            .map(|(p1, p2)| {
+                                p1.map(|p| p.len()).unwrap_or(0) + p2.map(|p| p.len()).unwrap_or(0)
+                            })
+                            .collect();
 
                         let choice_count = std::cmp::min(
                             layer.neighborhood_size * 10,
@@ -1108,7 +1124,14 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
 
                         for i in 0..partition_choices.len() {
                             let partition = partitions[partition_choices[i].0];
-                            let choice = &partition[partition_choices[i].1];
+                            let choice_index = partition_choices[i].1;
+                            let first_len = partition.0.map(|p| p.len()).unwrap_or(0);
+                            let choice = if choice_index < first_len {
+                                let x = &partition.0.as_ref().unwrap()[choice_index];
+                                (x.0, x.1)
+                            } else {
+                                partition.1.as_ref().unwrap()[choice_index - first_len]
+                            };
                             let distance = borrowed_comparator.compare_vec(
                                 AbstractVector::Stored(*vector_id),
                                 AbstractVector::Stored(choice.1),
