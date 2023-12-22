@@ -919,42 +919,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         let layers_above: &[Layer<C, T>] = layers_above;
         let layer = &mut layers_below[0];
 
-        vecs.sort();
-        // this will be swapped out for the current nodes, therefore the variable name
-        let mut old_nodes = Vec::with_capacity(vecs.len() + layer.nodes.len());
-        std::mem::swap(&mut old_nodes, &mut layer.nodes);
-
-        let mut old_nodes_iter = old_nodes.iter().peekable();
-        let mut new_nodes_iter = vecs.iter().peekable();
-        let mut old_nodes_map = Vec::with_capacity(old_nodes.len());
-        let mut new_nodes_map = Vec::with_capacity(vecs.len());
-        let mut vecs: Vec<VectorId> = Vec::with_capacity(vecs.len());
-        loop {
-            let old_nodes_next = old_nodes_iter.peek();
-            let new_nodes_next = new_nodes_iter.peek();
-            match (old_nodes_next, new_nodes_next) {
-                (None, None) => break,
-                (Some(_), None) => {
-                    layer.nodes.push(*old_nodes_iter.next().unwrap());
-                    old_nodes_map.push(layer.nodes.len() - 1);
-                }
-                (None, Some(v)) => {
-                    vecs.push(**v);
-                    layer.nodes.push(*new_nodes_iter.next().unwrap());
-                    new_nodes_map.push(layer.nodes.len() - 1);
-                }
-                (Some(old), Some(new)) => {
-                    if old <= new {
-                        layer.nodes.push(*old_nodes_iter.next().unwrap());
-                        old_nodes_map.push(layer.nodes.len() - 1);
-                    } else {
-                        vecs.push(**new);
-                        layer.nodes.push(*new_nodes_iter.next().unwrap());
-                        new_nodes_map.push(layer.nodes.len() - 1);
-                    }
-                }
-            }
-        }
+        let (old_nodes, old_nodes_map, new_nodes_map, vecs) = generate_node_maps(vecs, layer);
 
         assert_eq!(old_nodes_map.len() + new_nodes_map.len(), layer.nodes.len());
 
@@ -966,54 +931,10 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         };
         std::mem::swap(&mut layer.neighbors, &mut old_neighbors);
 
-        // insert old nodes with shifted offsets
-        (0..old_nodes.len())
-            .into_par_iter()
-            .for_each(|old_node_id| {
-                let old_neighborhood = &old_neighbors[old_node_id * layer.neighborhood_size
-                    ..(old_node_id + 1) * layer.neighborhood_size];
-                let new_node_id = old_nodes_map[old_node_id];
-                let new_neighborhood = unsafe {
-                    std::slice::from_raw_parts_mut(
-                        layer
-                            .neighbors
-                            .as_ptr()
-                            .add(new_node_id * layer.neighborhood_size)
-                            as *mut NodeId,
-                        layer.neighborhood_size,
-                    )
-                };
-
-                for i in 0..layer.neighborhood_size {
-                    if old_neighborhood[i].0 == !0 {
-                        new_neighborhood[i] = NodeId(!0);
-                    } else {
-                        new_neighborhood[i] = NodeId(old_nodes_map[old_neighborhood[i].0]);
-                    }
-                }
-            });
+        copy_old_neighbhoods_into_layer(&old_nodes, &old_neighbors, &old_nodes_map, layer);
 
         let borrowed_comparator = &layer.comparator;
-        let cross_compare: HashMap<VectorId, Vec<(VectorId, f32)>> = vecs
-            .par_iter()
-            .map(|v| {
-                let distances: Vec<(VectorId, f32)> = vecs
-                    .par_iter()
-                    .flat_map(|w| {
-                        if w == v {
-                            None
-                        } else {
-                            let distance = borrowed_comparator.compare_vec(
-                                AbstractVector::Stored(*w),
-                                AbstractVector::Stored(*v),
-                            );
-                            Some((*w, distance))
-                        }
-                    })
-                    .collect();
-                (*v, distances)
-            })
-            .collect();
+        let cross_compare = cross_compare_vectors(&vecs, borrowed_comparator);
 
         let mut pseudo_layers: Vec<&Layer<_, _>> = Vec::new();
         pseudo_layers.extend(layers_above.iter());
@@ -1035,15 +956,19 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                     &pseudo_layers,
                 );
                 let cross_results = cross_compare.get(v).unwrap();
+
                 distances.extend(cross_results);
+
                 distances.sort_by_key(|(v, d)| (*v, OrderedFloat(*d)));
                 distances.dedup_by_key(|(v, _)| *v);
                 distances.sort_by_key(|(v, d)| (OrderedFloat(*d), *v));
                 distances.truncate(layer.neighborhood_size);
+
                 let neighborhood_distances: Vec<(NodeId, f32)> = distances
                     .into_iter()
                     .map(|(w, d)| (layer.get_node(w).unwrap(), d))
                     .collect();
+
                 let mut neighborhood: Vec<NodeId> =
                     neighborhood_distances.iter().map(|(n, _)| *n).collect();
                 neighborhood.resize(layer.neighborhood_size, NodeId(!0));
@@ -1110,13 +1035,119 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         });
     }
 
+    pub fn improve_super_links(&mut self, layer_id: usize, vecs: Vec<VectorId>) {
+        let supers = self.supers_for_layer(layer_id);
+        supers.iter().for_each(|sup| {
+            vecs.iter().for_each(|v| {});
+        })
+    }
+
     pub fn improve_index(&mut self) {
         for layer_id in 0..self.layer_count() - 1 {
             let vecs = self.discover_vectors_to_promote(layer_id);
             eprintln!("Vectors to promote: {vecs:?}");
-            self.extend_layer(layer_id + 1, vecs)
+            self.improve_super_links(layer_id, vecs);
+            //self.extend_layer(layer_id + 1, vecs)
         }
     }
+}
+
+fn cross_compare_vectors<C: Comparator<T> + 'static, T: Sync + 'static>(
+    vecs: &Vec<VectorId>,
+    borrowed_comparator: &C,
+) -> HashMap<VectorId, Vec<(VectorId, f32)>> {
+    let cross_compare: HashMap<VectorId, Vec<(VectorId, f32)>> = vecs
+        .par_iter()
+        .map(|v| {
+            let distances: Vec<(VectorId, f32)> = vecs
+                .par_iter()
+                .flat_map(|w| {
+                    if w == v {
+                        None
+                    } else {
+                        let distance = borrowed_comparator
+                            .compare_vec(AbstractVector::Stored(*w), AbstractVector::Stored(*v));
+                        Some((*w, distance))
+                    }
+                })
+                .collect();
+            (*v, distances)
+        })
+        .collect();
+    cross_compare
+}
+
+fn copy_old_neighbhoods_into_layer<C: Comparator<T> + 'static, T: Sync + 'static>(
+    old_nodes: &[VectorId],
+    old_neighbors: &[NodeId],
+    old_nodes_map: &[usize],
+    layer: &mut Layer<C, T>,
+) {
+    // insert old nodes with shifted offsets
+    (0..old_nodes.len())
+        .into_par_iter()
+        .for_each(|old_node_id| {
+            let nhs = layer.neighborhood_size;
+            let old_neighborhood = &old_neighbors[old_node_id * nhs..(old_node_id + 1) * nhs];
+            let new_node_id = old_nodes_map[old_node_id];
+            let new_neighborhood = unsafe {
+                std::slice::from_raw_parts_mut(
+                    layer.neighbors.as_ptr().add(new_node_id * nhs) as *mut NodeId,
+                    nhs,
+                )
+            };
+
+            for i in 0..nhs {
+                if old_neighborhood[i].0 == !0 {
+                    new_neighborhood[i] = NodeId(!0);
+                } else {
+                    new_neighborhood[i] = NodeId(old_nodes_map[old_neighborhood[i].0]);
+                }
+            }
+        });
+}
+
+fn generate_node_maps<C: Comparator<T> + 'static, T: Sync + 'static>(
+    mut vecs: Vec<VectorId>,
+    layer: &mut Layer<C, T>,
+) -> (Vec<VectorId>, Vec<usize>, Vec<usize>, Vec<VectorId>) {
+    vecs.sort();
+    // this will be swapped out for the current nodes, therefore the variable name
+    let mut old_nodes = Vec::with_capacity(vecs.len() + layer.nodes.len());
+    std::mem::swap(&mut old_nodes, &mut layer.nodes);
+
+    let mut old_nodes_iter = old_nodes.iter().peekable();
+    let mut new_nodes_iter = vecs.iter().peekable();
+    let mut old_nodes_map = Vec::with_capacity(old_nodes.len());
+    let mut new_nodes_map = Vec::with_capacity(vecs.len());
+    let mut vecs: Vec<VectorId> = Vec::with_capacity(vecs.len());
+    loop {
+        let old_nodes_next = old_nodes_iter.peek();
+        let new_nodes_next = new_nodes_iter.peek();
+        match (old_nodes_next, new_nodes_next) {
+            (None, None) => break,
+            (Some(_), None) => {
+                layer.nodes.push(*old_nodes_iter.next().unwrap());
+                old_nodes_map.push(layer.nodes.len() - 1);
+            }
+            (None, Some(v)) => {
+                vecs.push(**v);
+                layer.nodes.push(*new_nodes_iter.next().unwrap());
+                new_nodes_map.push(layer.nodes.len() - 1);
+            }
+            (Some(old), Some(new)) => {
+                if old <= new {
+                    layer.nodes.push(*old_nodes_iter.next().unwrap());
+                    old_nodes_map.push(layer.nodes.len() - 1);
+                } else {
+                    vecs.push(**new);
+                    layer.nodes.push(*new_nodes_iter.next().unwrap());
+                    new_nodes_map.push(layer.nodes.len() - 1);
+                }
+            }
+        }
+    }
+    (old_nodes, old_nodes_map, new_nodes_map, vecs)
 }
 
 pub enum AllVectorIterator<'a> {
