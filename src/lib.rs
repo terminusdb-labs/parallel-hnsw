@@ -905,7 +905,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             .unwrap_or_default()
     }
 
-    pub fn extend_layer(&mut self, layer_id: usize, mut vecs: Vec<VectorId>) {
+    pub fn extend_layer(&mut self, layer_id: usize, vecs: Vec<VectorId>) {
         let layer_id_from_top = self.layer_count() - layer_id - 1;
         eprintln!("Extending layer: {layer_id:?}");
         eprintln!("Counting as {layer_id_from_top:?}");
@@ -1035,19 +1035,11 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         });
     }
 
-    pub fn improve_super_links(&mut self, layer_id: usize, vecs: Vec<VectorId>) {
-        let supers = self.supers_for_layer(layer_id);
-        supers.iter().for_each(|sup| {
-            vecs.iter().for_each(|v| {});
-        })
-    }
-
     pub fn improve_index(&mut self) {
         for layer_id in 0..self.layer_count() - 1 {
             let vecs = self.discover_vectors_to_promote(layer_id);
             eprintln!("Vectors to promote: {vecs:?}");
-            self.improve_super_links(layer_id, vecs);
-            //self.extend_layer(layer_id + 1, vecs)
+            self.extend_layer(layer_id + 1, vecs)
         }
     }
 }
@@ -1546,7 +1538,7 @@ mod tests {
             eprintln!("Searching for {i}");
             */
             let v = AbstractVector::Unstored(datum);
-            let results = hnsw.search(v, 300);
+            let results = hnsw.search(v, 100);
             if VectorId(i) == results[0].0 {
                 total_relevant += 1;
             } else {
@@ -1603,19 +1595,43 @@ mod tests {
         let size = 10000;
         let dimension = 10;
         let mut hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
-
-        //do_test_recall(&hnsw, 0.999);
+        let nodes = &hnsw.layers[0].nodes;
+        eprintln!("nodes at 0 {:?}", nodes);
+        let neighbors = &hnsw.layers[0].neighbors;
+        eprintln!("neighbors at 0 {:?}", neighbors);
+        do_test_recall(&hnsw, 0.999);
         //eprintln!("Top nodes: {:?}", hnsw.layers[0].nodes);
         //eprintln!("Top neighbors: {:?}", hnsw.layers[0].neighbors);
         hnsw.improve_index();
         //eprintln!("usize max: {}", !0_usize);
         //eprintln!("Top nodes after: {:?}", hnsw.layers[0].nodes);
         /*
-        let v = 9817;
-        let n = hnsw.layers[0].get_node(VectorId(v)).unwrap();
-        let neighbors = &hnsw.layers[0].neighbors[n.0..hnsw.layers[0].neighborhood_size];
+
+        let v = 2706;
+        let n = hnsw.layers[2].get_node(VectorId(v)).unwrap();
+        let nhs = hnsw.layers[1].neighborhood_size;
+        let neighbors = &hnsw.layers[2].neighbors[n.0 * nhs..(n.0 + 1) * nhs];
         eprintln!("neighbors for {v} after: {:?}", neighbors);
-        */
+
+        let v = 101;
+        let n = hnsw.layers[1].get_node(VectorId(v)).unwrap();
+        let nhs = hnsw.layers[1].neighborhood_size;
+        let neighbors = &hnsw.layers[1].neighbors[n.0 * nhs..(n.0 + 1) * nhs];
+
+        eprintln!("neighbors for {v} after: {:?}", neighbors);
+        let nodes = &hnsw.layers[0].nodes;
+        eprintln!("nodes at 0 {:?}", nodes);
+        let neighbors = &hnsw.layers[0].neighbors;
+        eprintln!("neighbors at 0 {:?}", neighbors);
+        let nodes = &hnsw.layers[1].nodes;
+        eprintln!("nodes at 1 {:?}", nodes);
+         */
+        let v = 2706;
+        let n = hnsw.layers[2].get_node(VectorId(v)).unwrap();
+        let nhs = hnsw.layers[2].neighborhood_size;
+        let neighbors = &hnsw.layers[2].neighbors[n.0 * nhs..(n.0 + 1) * nhs];
+        eprintln!("neighbors for {v} after: {:?}", neighbors);
+
         do_test_recall(&hnsw, 1.0);
     }
 
