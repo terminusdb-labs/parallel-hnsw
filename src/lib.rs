@@ -521,6 +521,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         // Parameter for the number of neighbours to look at from the proceeding layer.
         let number_of_supers_to_check = 5; // neighborhood_size;
 
+        eprintln!("Finding partition groups");
         // 1. Calculate our node id, and find our neighborhood in the above layer
         let initial_partitions = self.immutable.generate_initial_partitions(
             &vs,
@@ -529,6 +530,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             &self.layers,
         );
 
+        eprintln!("Generating partition groups");
         // 2. Partition the layer in terms of the closeness to the
         // best node in the layer above
         let partition_groups = initial_partitions
@@ -543,6 +545,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         unsafe {
             all_distances.set_len(vs.len());
         }
+        eprintln!("Scanning partition groups");
         partition_groups.par_iter().for_each(|(_sup, partition)| {
             partition
                 .par_iter()
@@ -568,7 +571,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                     let partition_maxes: Vec<_> = partitions.iter().map(|p| p.len()).collect();
 
                     let choice_count =
-                        std::cmp::min(neighborhood_size * 10, partition_maxes.iter().sum());
+                        std::cmp::min(neighborhood_size * 5, partition_maxes.iter().sum());
                     let partition_choices =
                         choose_n(choice_count, partition_maxes, node_id.0, &mut prng);
 
@@ -599,6 +602,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 });
         });
 
+        eprintln!("Making neighborhoods bidirectional");
         // 4. Make neighborhoods bidirectional
         let mut neighbor_candidates: Vec<_> = all_distances
             .par_iter()
@@ -620,6 +624,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         // independent and therefore safe.
         let neighbors = vec![NodeId(!0); vs.len() * neighborhood_size];
 
+        eprintln!("Writing neighborhoods");
         // 5. In parallel, write our own best neighbors, in order of
         // distance, into our neighborhood array truncating to
         // neighborhood size
@@ -946,7 +951,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             _phantom: PhantomData,
         };
         pseudo_layers.push(&pseudo_layer);
-
+        eprintln!("Finding neighborhoods");
         let mut neighborhood_candidates: Vec<(NodeId, NodeId, f32)> = vecs
             .par_iter()
             .flat_map(|v| {
@@ -992,7 +997,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                     .map(move |(w, d)| (w, our_node, d))
             })
             .collect();
-
+        eprintln!("Grouping neighborhoods");
         neighborhood_candidates.par_sort_by_key(|(n1, n2, d)| (*n1, *n2, OrderedFloat(*d)));
         let final_groups = neighborhood_candidates
             .into_iter()
@@ -1538,7 +1543,7 @@ mod tests {
             eprintln!("Searching for {i}");
             */
             let v = AbstractVector::Unstored(datum);
-            let results = hnsw.search(v, 100);
+            let results = hnsw.search(v, 300);
             if VectorId(i) == results[0].0 {
                 total_relevant += 1;
             } else {
