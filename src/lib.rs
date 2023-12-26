@@ -602,22 +602,29 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 });
         });
 
+        // This was needed to reduce memory pressure
+        // we should *really* consider succinct data structures
+        let mut neighbor_candidates: Vec<(NodeId, f32)> =
+            vec![(NodeId(!0), f32::MAX); vs.len() * neighborhood_size];
         eprintln!("Making neighborhoods bidirectional");
         // 4. Make neighborhoods bidirectional
-        let mut neighbor_candidates: Vec<_> = all_distances
-            .par_iter()
+        all_distances
+            .iter()
             .enumerate()
-            .flat_map(|(node, distances)| {
+            .for_each(|(node, distances)| {
                 let node = NodeId(node);
-                distances
-                    .par_iter()
-                    .map(move |(neighbor, distance)| (*neighbor, node, OrderedFloat(*distance)))
-            })
-            .collect();
-        neighbor_candidates.par_sort();
-        let neighbor_of_neighbor_partitions = neighbor_candidates
-            .into_iter()
-            .into_group_map_by(|(node, _, _)| *node);
+                eprintln!("node: {node:?}");
+                distances.iter().for_each(|(neighbor, distance)| {
+                    if *neighbor != node {
+                        let start = neighbor.0 * neighborhood_size;
+                        let end = (neighbor.0 + 1) * neighborhood_size;
+                        insert_into_distances(
+                            (node, *distance),
+                            &mut neighbor_candidates[start..end],
+                        );
+                    }
+                })
+            });
 
         // This neighbors array, despite seemingly immutable, is going
         // to be mutated unsafely! However, each segment is logically
@@ -632,13 +639,10 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             .par_iter_mut()
             .enumerate()
             .for_each(|(i, distances)| {
-                if let Some(neighbors) = neighbor_of_neighbor_partitions.get(&NodeId(i)) {
-                    distances.extend(
-                        neighbors
-                            .iter()
-                            .map(|(_, node, distance)| (*node, distance.0)),
-                    );
-                }
+                let start = i * neighborhood_size;
+                let end = (i + 1) * neighborhood_size;
+
+                distances.extend(neighbor_candidates[start..end].iter());
                 distances.sort_by_key(|d| (OrderedFloat(d.1), d.0));
                 distances.dedup();
                 distances.truncate(neighborhood_size);
@@ -646,6 +650,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 // We know we have a unique index here that is not
                 // going to be contended. Therefore we just use
                 // unsafe.
+
                 let unsafe_neighbors: *mut NodeId = neighbors.as_ptr() as *mut NodeId;
                 (0..distances.len()).for_each(|j| unsafe {
                     let offset = unsafe_neighbors.add(i * neighborhood_size + j);
@@ -1163,6 +1168,22 @@ impl<'a> Iterator for AllVectorIterator<'a> {
     }
 }
 
+fn insert_into_distances(pair: (NodeId, f32), slice: &mut [(NodeId, f32)]) {
+    let idx = slice.partition_point(|(_n, d)| OrderedFloat(*d) < OrderedFloat(pair.1));
+    if idx >= slice.len() || slice[idx].0 == pair.0 {
+    } else {
+        let swap_start = slice.partition_point(|(_, d)| OrderedFloat(*d) != OrderedFloat(f32::MAX));
+
+        for i in (idx + 1..swap_start + 1).rev() {
+            if swap_start == slice.len() {
+                continue;
+            }
+            slice[i] = slice[i - 1];
+        }
+        slice[idx] = pair;
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LayerMeta {
     pub node_count: usize,
@@ -1604,7 +1625,7 @@ mod tests {
         eprintln!("nodes at 0 {:?}", nodes);
         let neighbors = &hnsw.layers[0].neighbors;
         eprintln!("neighbors at 0 {:?}", neighbors);
-        do_test_recall(&hnsw, 0.999);
+        do_test_recall(&hnsw, 1.0);
         //eprintln!("Top nodes: {:?}", hnsw.layers[0].nodes);
         //eprintln!("Top neighbors: {:?}", hnsw.layers[0].neighbors);
         hnsw.improve_index();
@@ -1667,5 +1688,52 @@ mod tests {
             let results = hnsw.search(v, 9);
             assert_eq!(VectorId(i), results[0].0)
         }
+    }
+
+    #[test]
+    fn fixed_length_insertion() {
+        let mut v = vec![(NodeId(0), 1.2), (NodeId(3), 4.5), (NodeId(!0), f32::MAX)];
+        insert_into_distances((NodeId(4), 0.1), &mut v);
+        assert_eq!(
+            v,
+            vec![(NodeId(4), 0.1), (NodeId(0), 1.2), (NodeId(3), 4.5)]
+        );
+
+        let mut v = vec![
+            (NodeId(!0), f32::MAX),
+            (NodeId(!0), f32::MAX),
+            (NodeId(!0), f32::MAX),
+        ];
+        insert_into_distances((NodeId(4), 0.1), &mut v);
+        assert_eq!(
+            v,
+            vec![
+                (NodeId(4), 0.1),
+                (NodeId(18446744073709551615), 3.4028235e38),
+                (NodeId(18446744073709551615), 3.4028235e38)
+            ]
+        );
+
+        insert_into_distances((NodeId(4), 0.1), &mut v);
+        assert_eq!(
+            v,
+            vec![
+                (NodeId(4), 0.1),
+                (NodeId(18446744073709551615), 3.4028235e38),
+                (NodeId(18446744073709551615), 3.4028235e38)
+            ]
+        );
+        let mut v = vec![(NodeId(0), 0.1), (NodeId(3), 0.2), (NodeId(5), 0.3)];
+        insert_into_distances((NodeId(4), 0.4), &mut v);
+        assert_eq!(
+            v,
+            vec![(NodeId(0), 0.1), (NodeId(3), 0.2), (NodeId(5), 0.3),]
+        );
+        eprintln!("v: {v:?}");
+
+        let mut v = vec![(NodeId(0), 0.1), (NodeId(3), 0.2), (NodeId(5), 0.5)];
+        insert_into_distances((NodeId(4), 0.4), &mut v);
+        assert_eq!(v, [(NodeId(0), 0.1), (NodeId(3), 0.2), (NodeId(4), 0.4)]);
+        eprintln!("v: {v:?}");
     }
 }
