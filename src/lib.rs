@@ -613,7 +613,6 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             .enumerate()
             .for_each(|(node, distances)| {
                 let node = NodeId(node);
-                eprintln!("node: {node:?}");
                 distances.iter().for_each(|(neighbor, distance)| {
                     if *neighbor != node {
                         let start = neighbor.0 * neighborhood_size;
