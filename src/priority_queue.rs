@@ -79,7 +79,7 @@ impl<'a, Id: PartialEq + Copy> PriorityQueue<'a, Id> {
     }
 }
 
-struct PriorityQueueIter<'iter, Id> {
+pub struct PriorityQueueIter<'iter, Id> {
     data_iter: &'iter [Id],
     priority_iter: &'iter [f32],
 }

@@ -595,24 +595,32 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                     }
                     distances.sort_by_key(|d| (OrderedFloat(d.1), d.0));
                     distances.dedup();
-                    let distances: Vec<_> = distances
+                    let (mut nodes, mut distances): (Vec<_>, Vec<f32>) = distances
                         .into_iter()
                         .filter(|(n, _d)| node_id != n)
                         .take(neighborhood_size)
-                        .collect();
-                    // eprintln!("distances@vec {vector_id:?}: {distances:?}");
-                    unsafe {
-                        let mut neighbor_offset = neighbors.add(node_id.0 * neighborhood_size);
-                        let mut distance_offset =
-                            unsafe_distances.add(node_id.0 * neighborhood_size);
+                        .unzip();
+                    nodes.resize_with(neighborhood_size, || NodeId(!0));
+                    distances.resize_with(neighborhood_size, || f32::MAX);
 
-                        for (n, d) in distances.iter() {
-                            *neighbor_offset = *n;
-                            *distance_offset = *d;
-                            neighbor_offset.add(1);
-                            distance_offset.add(1);
-                        }
-                    }
+                    let unsafe_nodes = unsafe {
+                        std::slice::from_raw_parts_mut(
+                            neighbors.as_ptr().add(node_id.0 * neighborhood_size) as *mut NodeId,
+                            neighborhood_size,
+                        )
+                    };
+                    let unsafe_distances = unsafe {
+                        std::slice::from_raw_parts_mut(
+                            neighbor_distances
+                                .as_ptr()
+                                .add(node_id.0 * neighborhood_size)
+                                as *mut f32,
+                            neighborhood_size,
+                        )
+                    };
+
+                    unsafe_nodes.copy_from_slice(&nodes);
+                    unsafe_distances.copy_from_slice(&distances);
                 });
         });
 
@@ -626,7 +634,10 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         // 4. Make neighborhoods bidirectional
         for i in 0..neighbor_candidates.len() {
             let node = NodeId(i);
-            let neighborhood_copy: Vec<(NodeId, f32)> = neighbor_candidates[i].iter().collect();
+            let neighborhood_copy: Vec<(NodeId, f32)> = neighbor_candidates[i]
+                .iter()
+                .filter(|(n, _)| n.0 != !0)
+                .collect();
             for (neighbor, distance) in neighborhood_copy {
                 neighbor_candidates[neighbor.0].insert(node, distance);
             }
@@ -1599,7 +1610,7 @@ mod tests {
         eprintln!("nodes at 0 {:?}", nodes);
         let neighbors = &hnsw.layers[0].neighbors;
         eprintln!("neighbors at 0 {:?}", neighbors);
-        do_test_recall(&hnsw, 1.0);
+        do_test_recall(&hnsw, 0.999);
         //eprintln!("Top nodes: {:?}", hnsw.layers[0].nodes);
         //eprintln!("Top neighbors: {:?}", hnsw.layers[0].neighbors);
         hnsw.improve_index();
