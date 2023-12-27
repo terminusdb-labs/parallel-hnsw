@@ -18,12 +18,32 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 
-use crate::priority_queue::PriorityQueue;
+use crate::priority_queue::{EmptyValue, PriorityQueue};
 
 #[derive(PartialEq, Eq, Debug, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct VectorId(pub usize);
 #[derive(PartialEq, Eq, Debug, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct NodeId(pub usize);
+
+impl EmptyValue for NodeId {
+    fn is_empty(&self) -> bool {
+        self.0 == !0
+    }
+
+    fn empty() -> Self {
+        NodeId(!0)
+    }
+}
+
+impl EmptyValue for VectorId {
+    fn is_empty(&self) -> bool {
+        self.0 == !0
+    }
+
+    fn empty() -> Self {
+        VectorId(!0)
+    }
+}
 
 mod priority_queue;
 
@@ -110,20 +130,16 @@ impl<C: Comparator<T>, T> Layer<C, T> {
 
     pub fn nearest_neighbors(&self, n: NodeId, number_of_nodes: usize) -> Vec<(NodeId, f32)> {
         let v = self.get_vector(n);
-        let candidates = vec![(n, f32::MAX)];
-        self.closest_nodes(AbstractVector::Stored(v), candidates, number_of_nodes)
+        let mut candidates = PriorityQueue::new(number_of_nodes);
+        candidates.insert(n, f32::MAX);
+        self.closest_nodes(AbstractVector::Stored(v), &mut candidates);
+        candidates.iter().collect()
     }
 
-    pub fn closest_nodes(
-        &self,
-        v: AbstractVector<T>,
-        candidates: Vec<(NodeId, f32)>,
-        number_of_nodes: usize,
-    ) -> Vec<(NodeId, f32)> {
+    pub fn closest_nodes(&self, v: AbstractVector<T>, candidates: &mut PriorityQueue<NodeId>) {
         assert!(!candidates.is_empty());
-        let mut visit_queue = candidates.clone();
+        let mut visit_queue: Vec<(NodeId, f32)> = candidates.iter().collect();
         visit_queue.reverse();
-        let mut result = candidates;
         let mut visited: HashSet<NodeId> = HashSet::new();
         // eprintln!("------------------------------------");
         // eprintln!("Initial visit queue: {visit_queue:?}");
@@ -131,9 +147,8 @@ impl<C: Comparator<T>, T> Layer<C, T> {
             // eprintln!("...");
             // eprintln!("working with next: {next:?}");
             visited.insert(next);
-            let worst = result.last().cloned();
             let neighbors = self.get_neighbors(next);
-            let neighbor_distances: Vec<_> = neighbors
+            let mut neighbor_distances: Vec<_> = neighbors
                 .iter() // Remove empty cells and previously visited nodes
                 .filter(|n| n.0 != !0 && !visited.contains(*n))
                 .map(|n| {
@@ -143,47 +158,43 @@ impl<C: Comparator<T>, T> Layer<C, T> {
                     (*n, distance)
                 })
                 .collect();
+            neighbor_distances.sort_by_key(|(n, distance)| (OrderedFloat(*distance), *n));
+
             // eprintln!("calculated neighbor_distances@{next:?}: {neighbor_distances:?}");
             visited.extend(neighbor_distances.iter().map(|(n, _)| n));
+
+            let worst = candidates.last();
             visit_queue.extend(
                 neighbor_distances
                     .iter()
                     .filter(|(_, d)| worst.is_none() || worst.as_ref().unwrap().1 > *d),
             );
 
-            result.extend(neighbor_distances);
-            result.sort_by_key(|(n, distance)| (OrderedFloat(*distance), *n));
-            // eprintln!("number of nodes {number_of_nodes}");
-            // eprintln!("previous worst: {worst:?}");
-            // eprintln!("worst result {:?}", result.last().cloned());
-            // eprintln!("new result: {result:?}");
+            let did_something = candidates.merge_pairs(&neighbor_distances);
 
-            result.truncate(number_of_nodes);
-
-            if result.len() == number_of_nodes && worst == result.last().cloned() {
+            if !did_something {
                 break;
             }
             // Sort in reverse order
             visit_queue.sort_by_key(|(n, distance)| (OrderedFloat(-*distance), *n))
         }
-        // eprintln!("final result: {result:?}");
-        result
     }
 
     pub fn closest_vectors(
         &self,
         v: AbstractVector<T>,
-        candidates: &[(VectorId, f32)],
-        number_of_vectors: usize,
+        candidates: &PriorityQueue<VectorId>,
     ) -> Vec<(VectorId, f32)> {
-        let candidate_nodes: Vec<_> = candidates
+        let (mut candidate_vecs, mut candidate_distances): (Vec<_>, Vec<_>) = candidates
             .iter()
             // We should only be proceeding downwards!
-            .map(|(v, d)| (self.get_node(*v).unwrap(), *d))
-            .collect();
-        self.closest_nodes(v, candidate_nodes, number_of_vectors)
+            .map(|(v, d)| (self.get_node(v).unwrap(), d))
+            .unzip();
+        let mut queue = PriorityQueue::from_slices(&mut candidate_vecs, &mut candidate_distances);
+        self.closest_nodes(v, &mut queue);
+        queue
             .iter()
-            .map(|(node_id, distance)| (self.get_vector(*node_id), *distance))
+            .map(|(node_id, distance)| (self.get_vector(node_id), distance))
             .collect()
     }
 
@@ -437,8 +448,9 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
                     .compare_vec(v.clone(), AbstractVector::Stored(entry_vector))
             })
             .unwrap_or(0.0);
-        let mut candidates_queue = Vec::with_capacity(2 * number_of_candidates);
-        candidates_queue.push((entry_vector, distance_from_entry));
+        let mut candidates_queue = PriorityQueue::new(number_of_candidates);
+        candidates_queue.insert(entry_vector, distance_from_entry);
+        let mut candidate_queue_slice = candidate_queue.slice_to(1);
         for i in 0..layers.len() {
             let candidate_count = if layers.len() == 1 || i == layers.len() - 1 {
                 number_of_candidates
@@ -446,19 +458,12 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
                 upper_layer_candidate_count
             };
             let layer = &layers[i];
-            let closest =
-                layer
-                    .as_ref()
-                    .closest_vectors(v.clone(), &candidates_queue, candidate_count);
+            let closest = layer.as_ref().closest_vectors(v.clone(), &candidates_queue);
 
-            candidates_queue.extend(closest);
-            candidates_queue.sort_by_key(|(v, d)| (OrderedFloat(*d), *v));
-            candidates_queue.dedup();
-            // eprintln!("candidates_queue: {candidates_queue:?}");
-            candidates_queue.truncate(number_of_candidates);
+            candidates_queue.merge_pairs(&closest);
         }
 
-        candidates_queue
+        candidates_queue.iter().collect()
     }
 }
 
@@ -626,7 +631,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         let mut neighbor_candidates: Vec<PriorityQueue<NodeId>> = neighbors
             .chunks_exact_mut(neighborhood_size)
             .zip(neighbor_distances.chunks_exact_mut(neighborhood_size))
-            .map(|(data, priorities)| PriorityQueue { data, priorities })
+            .map(|(data, priorities)| PriorityQueue::from_slices(data, priorities))
             .collect();
 
         eprintln!("Making neighborhoods bidirectional");
@@ -1149,22 +1154,6 @@ impl<'a> Iterator for AllVectorIterator<'a> {
             AllVectorIterator::Full { iter } => iter.next().cloned(),
             AllVectorIterator::Empty => None,
         }
-    }
-}
-
-fn insert_into_distances(pair: (NodeId, f32), slice: &mut [(NodeId, f32)]) {
-    let idx = slice.partition_point(|(_n, d)| OrderedFloat(*d) < OrderedFloat(pair.1));
-    if idx >= slice.len() || slice[idx].0 == pair.0 {
-    } else {
-        let swap_start = slice.partition_point(|(_, d)| OrderedFloat(*d) != OrderedFloat(f32::MAX));
-
-        for i in (idx + 1..swap_start + 1).rev() {
-            if swap_start == slice.len() {
-                continue;
-            }
-            slice[i] = slice[i - 1];
-        }
-        slice[idx] = pair;
     }
 }
 

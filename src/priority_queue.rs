@@ -1,13 +1,60 @@
 use crate::OrderedFloat;
 
-pub struct PriorityQueue<'a, Id> {
-    pub data: &'a mut [Id],
-    pub priorities: &'a mut [f32],
+pub enum VecOrSlice<'a, T> {
+    Vec(Vec<T>),
+    Slice(&'a mut [T]),
 }
 
-impl<'a, Id: PartialEq + Copy> PriorityQueue<'a, Id> {
-    fn data(&'a self) -> &'a [Id] {
-        self.data
+impl<T> std::ops::Deref for VecOrSlice<'_, T> {
+    type Target = [T];
+    fn deref(&self) -> &Self::Target {
+        match self {
+            VecOrSlice::Vec(it) => it,
+            VecOrSlice::Slice(it) => it,
+        }
+    }
+}
+
+impl<T> std::ops::DerefMut for VecOrSlice<'_, T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        match self {
+            VecOrSlice::Vec(it) => it,
+            VecOrSlice::Slice(it) => it,
+        }
+    }
+}
+
+pub struct PriorityQueue<'a, Id: Clone> {
+    pub data: VecOrSlice<'a, Id>,
+    pub priorities: VecOrSlice<'a, f32>,
+}
+
+pub trait EmptyValue {
+    fn is_empty(&self) -> bool;
+    fn empty() -> Self;
+}
+
+impl<'a, Id: PartialEq + Copy + EmptyValue> PriorityQueue<'a, Id> {
+    pub fn is_empty(&'a self) -> bool {
+        self.data.len() == 0 || self.data[0].is_empty()
+    }
+
+    pub fn last(&'a self) -> Option<(Id, f32)> {
+        let past_last_idx = self
+            .priorities
+            .partition_point(|d| OrderedFloat(*d) != OrderedFloat(f32::MAX));
+        if past_last_idx == 0 {
+            None
+        } else {
+            Some((
+                self.data[past_last_idx - 1],
+                self.priorities[past_last_idx - 1],
+            ))
+        }
+    }
+
+    pub fn data(&'a self) -> &'a [Id] {
+        &self.data
     }
 
     fn insert_at(&mut self, idx: usize, elt: Id, priority: f32) {
@@ -62,19 +109,33 @@ impl<'a, Id: PartialEq + Copy> PriorityQueue<'a, Id> {
         did_something
     }
 
-    fn merge_from(&mut self, other: PriorityQueue<Id>) {
-        self.merge(other.data, other.priorities);
+    pub fn merge_from(&mut self, other: PriorityQueue<Id>) -> bool {
+        self.merge(&other.data, &other.priorities)
     }
 
-    fn merge_pairs(&mut self, other: &[(Id, f32)]) {
-        let (ids, priorities): (Vec<Id>, Vec<f32>) = other.iter().map(|p| *p).unzip();
-        self.merge(&ids, &priorities);
+    pub fn merge_pairs(&mut self, other: &[(Id, f32)]) -> bool {
+        let (ids, priorities): (Vec<Id>, Vec<f32>) = other.iter().copied().unzip();
+        self.merge(&ids, &priorities)
     }
 
     pub fn iter(&'a self) -> PriorityQueueIter<'a, Id> {
         PriorityQueueIter {
-            data_iter: self.data,
-            priority_iter: self.priorities,
+            data_iter: &self.data,
+            priority_iter: &self.priorities,
+        }
+    }
+
+    pub fn new(size: usize) -> PriorityQueue<'static, Id> {
+        PriorityQueue {
+            data: VecOrSlice::Vec(vec![Id::empty(); size]),
+            priorities: VecOrSlice::Vec(vec![f32::MAX; size]),
+        }
+    }
+
+    pub fn from_slices(data: &'a mut [Id], priorities: &'a mut [f32]) -> PriorityQueue<'a, Id> {
+        PriorityQueue {
+            data: VecOrSlice::Slice(data),
+            priorities: VecOrSlice::Slice(priorities),
         }
     }
 }
@@ -84,11 +145,14 @@ pub struct PriorityQueueIter<'iter, Id> {
     priority_iter: &'iter [f32],
 }
 
-impl<Id: PartialEq + Copy> Iterator for PriorityQueueIter<'_, Id> {
+impl<Id: PartialEq + Copy + EmptyValue> Iterator for PriorityQueueIter<'_, Id> {
     type Item = (Id, f32);
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some((data_head, data_tail)) = self.data_iter.split_first() {
+            if data_head.is_empty() {
+                return None;
+            }
             if let Some((priority_head, priority_tail)) = self.priority_iter.split_first() {
                 self.data_iter = data_tail;
                 self.priority_iter = priority_tail;
@@ -110,11 +174,8 @@ mod tests {
     fn fixed_length_insertion() {
         // At beginning
         let mut data = vec![NodeId(0), NodeId(3), NodeId(!0)];
-        let mut priorities = vec![0.1, 1.2, 4.5];
-        let mut priority_queue = PriorityQueue {
-            data: &mut data,
-            priorities: &mut priorities,
-        };
+        let mut priorities = vec![0.1, 1.2, f32::MAX];
+        let mut priority_queue = PriorityQueue::from_slices(&mut data, &mut priorities);
         priority_queue.insert(NodeId(4), 0.01);
         assert_eq!(data, vec![NodeId(4), NodeId(0), NodeId(3)]);
         assert_eq!(priorities, vec![0.01, 0.1, 1.2]);
@@ -122,10 +183,7 @@ mod tests {
         // into empty
         let mut data = vec![NodeId(!0), NodeId(!0), NodeId(!0)];
         let mut priorities = vec![f32::MAX, f32::MAX, f32::MAX];
-        let mut priority_queue = PriorityQueue {
-            data: &mut data,
-            priorities: &mut priorities,
-        };
+        let mut priority_queue = PriorityQueue::from_slices(&mut data, &mut priorities);
         priority_queue.insert(NodeId(4), 0.01);
         assert_eq!(
             data,
@@ -140,10 +198,7 @@ mod tests {
         // Don't double count
         let mut data = vec![NodeId(4), NodeId(!0), NodeId(!0)];
         let mut priorities = vec![0.01, f32::MAX, f32::MAX];
-        let mut priority_queue = PriorityQueue {
-            data: &mut data,
-            priorities: &mut priorities,
-        };
+        let mut priority_queue = PriorityQueue::from_slices(&mut data, &mut priorities);
         priority_queue.insert(NodeId(4), 0.01);
         assert_eq!(
             data,
@@ -158,10 +213,7 @@ mod tests {
         // Push off the end
         let mut data = vec![NodeId(1), NodeId(2), NodeId(3)];
         let mut priorities = vec![0.1, 0.2, 0.4];
-        let mut priority_queue = PriorityQueue {
-            data: &mut data,
-            priorities: &mut priorities,
-        };
+        let mut priority_queue = PriorityQueue::from_slices(&mut data, &mut priorities);
         priority_queue.insert(NodeId(4), 0.3);
         assert_eq!(data, vec![NodeId(1), NodeId(2), NodeId(4)]);
         assert_eq!(priorities, vec![0.1, 0.2, 0.3]);
@@ -169,10 +221,7 @@ mod tests {
         // Insert past the end
         let mut data = vec![NodeId(1), NodeId(2), NodeId(3)];
         let mut priorities = vec![0.1, 0.2, 0.3];
-        let mut priority_queue = PriorityQueue {
-            data: &mut data,
-            priorities: &mut priorities,
-        };
+        let mut priority_queue = PriorityQueue::from_slices(&mut data, &mut priorities);
         priority_queue.insert(NodeId(4), 0.4);
         assert_eq!(data, vec![NodeId(1), NodeId(2), NodeId(3)]);
         assert_eq!(priorities, vec![0.1, 0.2, 0.3]);
@@ -183,20 +232,54 @@ mod tests {
         // Interleaved
         let mut data1 = vec![NodeId(0), NodeId(2), NodeId(4)];
         let mut priorities1 = vec![0.0, 0.2, 0.4];
-        let mut priority_queue1 = PriorityQueue {
-            data: &mut data1,
-            priorities: &mut priorities1,
-        };
+        let mut priority_queue1 = PriorityQueue::from_slices(&mut data1, &mut priorities1);
 
         let mut data2 = vec![NodeId(1), NodeId(3), NodeId(5)];
         let mut priorities2 = vec![0.1, 0.3, 0.5];
-        let priority_queue2 = PriorityQueue {
-            data: &mut data2,
-            priorities: &mut priorities2,
-        };
+        let priority_queue2 = PriorityQueue::from_slices(&mut data2, &mut priorities2);
 
         priority_queue1.merge_from(priority_queue2);
         assert_eq!(data1, vec![NodeId(0), NodeId(1), NodeId(2)]);
         assert_eq!(priorities1, vec![0.0, 0.1, 0.2]);
+    }
+
+    #[test]
+    fn last_element() {
+        let mut data = vec![NodeId(0), NodeId(3), NodeId(!0)];
+        let mut priorities = vec![0.1, 1.2, f32::MAX];
+        let priority_queue = PriorityQueue::from_slices(&mut data, &mut priorities);
+
+        assert_eq!(priority_queue.last(), Some((NodeId(3), 1.2)));
+    }
+
+    #[test]
+    fn useless_merge() {
+        let mut data = vec![NodeId(0), NodeId(3), NodeId(5)];
+        let mut priorities = vec![0.0, 0.3, 0.5];
+
+        let mut priority_queue = PriorityQueue::from_slices(&mut data, &mut priorities);
+
+        let mut data2 = vec![NodeId(6), NodeId(7), NodeId(8)];
+        let mut priorities2 = vec![0.6, 0.7, 0.8];
+
+        let priority_queue2 = PriorityQueue::from_slices(&mut data2, &mut priorities2);
+
+        let result = priority_queue.merge_from(priority_queue2);
+        assert!(!result);
+        assert_eq!(data, vec![NodeId(0), NodeId(3), NodeId(5)]);
+    }
+
+    #[test]
+    fn productive_merge() {
+        let mut data = vec![NodeId(0), NodeId(3), NodeId(5)];
+        let mut priorities = vec![0.0, 0.3, 0.5];
+
+        let mut priority_queue = PriorityQueue::from_slices(&mut data, &mut priorities);
+
+        let pairs = vec![(NodeId(1), 0.1), (NodeId(2), 0.2), (NodeId(4), 0.4)];
+
+        let result = priority_queue.merge_pairs(&pairs);
+        assert!(result);
+        assert_eq!(data, vec![NodeId(0), NodeId(1), NodeId(2)]);
     }
 }
