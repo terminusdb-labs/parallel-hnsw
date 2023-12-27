@@ -532,14 +532,9 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         let mut neighbors = vec![NodeId(!0); total_size];
         // This is an auxilliary to keep track of the neighbors quality in a neighborhood
         let mut neighbor_distances = vec![f32::MAX; total_size];
+
         // This was needed to reduce memory pressure
         // we should *really* consider succinct data structures
-        let mut neighbor_candidates: Vec<PriorityQueue<NodeId>> = neighbors
-            .chunks_exact_mut(neighborhood_size)
-            .zip(neighbor_distances.chunks_exact_mut(neighborhood_size))
-            .map(|(data, priorities)| PriorityQueue { data, priorities })
-            .collect();
-
         eprintln!("Finding partition groups");
         // 1. Calculate our node id, and find our neighborhood in the above layer
         let initial_partitions = self.immutable.generate_initial_partitions(
@@ -606,25 +601,26 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                         .take(neighborhood_size)
                         .collect();
                     // eprintln!("distances@vec {vector_id:?}: {distances:?}");
-                    let queue = &mut neighbor_candidates[node_id.0];
-                    let data = &mut queue.data;
-                    let priorities = &mut queue.priorities;
-                    let unsafe_neighbors: *mut NodeId = data.as_mut_ptr() as *mut NodeId;
-
-                    let unsafe_distances: *mut f32 = priorities.as_mut_ptr() as *mut f32;
                     unsafe {
-                        let mut neighbor_offset =
-                            unsafe_neighbors.add(node_id.0 * neighborhood_size);
+                        let mut neighbor_offset = neighbors.add(node_id.0 * neighborhood_size);
                         let mut distance_offset =
                             unsafe_distances.add(node_id.0 * neighborhood_size);
 
-                        for (i, (n, d)) in distances.iter().enumerate() {
+                        for (n, d) in distances.iter() {
                             *neighbor_offset = *n;
                             *distance_offset = *d;
+                            neighbor_offset.add(1);
+                            distance_offset.add(1);
                         }
                     }
                 });
         });
+
+        let mut neighbor_candidates: Vec<PriorityQueue<NodeId>> = neighbors
+            .chunks_exact_mut(neighborhood_size)
+            .zip(neighbor_distances.chunks_exact_mut(neighborhood_size))
+            .map(|(data, priorities)| PriorityQueue { data, priorities })
+            .collect();
 
         eprintln!("Making neighborhoods bidirectional");
         // 4. Make neighborhoods bidirectional
