@@ -19,10 +19,14 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 
+use crate::priority_queue::PriorityQueue;
+
 #[derive(PartialEq, Eq, Debug, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct VectorId(pub usize);
 #[derive(PartialEq, Eq, Debug, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct NodeId(pub usize);
+
+mod priority_queue;
 
 pub enum AbstractVector<'a, T> {
     Stored(VectorId),
@@ -388,7 +392,7 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
                 let initial_vector_distances = if layers.is_empty() {
                     HnswSearcher::compare_all(comparator, *vector_id, vs)
                 } else {
-                    self.initial_vector_distances(*vector_id, number_of_supers_to_check, &layers)
+                    self.initial_vector_distances(*vector_id, number_of_supers_to_check, layers)
                 };
                 let initial_node_distances: Vec<_> = initial_vector_distances
                     .into_iter()
@@ -521,6 +525,21 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         // Parameter for the number of neighbours to look at from the proceeding layer.
         let number_of_supers_to_check = 5; // neighborhood_size;
 
+        eprintln!("Constructing neighorhood data structure");
+        // This is the final neighbors array, we are going to slice it up here
+        // and seed it with some prospects.
+        let total_size = vs.len() * neighborhood_size;
+        let mut neighbors = vec![NodeId(!0); total_size];
+        // This is an auxilliary to keep track of the neighbors quality in a neighborhood
+        let mut neighbor_distances = vec![f32::MAX; total_size];
+        // This was needed to reduce memory pressure
+        // we should *really* consider succinct data structures
+        let mut neighbor_candidates: Vec<PriorityQueue<NodeId>> = neighbors
+            .chunks_exact_mut(neighborhood_size)
+            .zip(neighbor_distances.chunks_exact_mut(neighborhood_size))
+            .map(|(data, priorities)| PriorityQueue { data, priorities })
+            .collect();
+
         eprintln!("Finding partition groups");
         // 1. Calculate our node id, and find our neighborhood in the above layer
         let initial_partitions = self.immutable.generate_initial_partitions(
@@ -540,11 +559,6 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         // 3. Calculate our neighbourhoods by comparing distances in our partition
         let borrowed_comparator = &comparator;
 
-        let mut all_distances: Vec<NodeDistances> = Vec::with_capacity(vs.len());
-        #[allow(clippy::uninit_vec)]
-        unsafe {
-            all_distances.set_len(vs.len());
-        }
         eprintln!("Scanning partition groups");
         partition_groups.par_iter().for_each(|(_sup, partition)| {
             partition
@@ -592,70 +606,35 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                         .take(neighborhood_size)
                         .collect();
                     // eprintln!("distances@vec {vector_id:?}: {distances:?}");
-                    let unsafe_distances: *mut NodeDistances =
-                        all_distances.as_ptr() as *mut NodeDistances;
-                    unsafe {
-                        let offset = unsafe_distances.add(node_id.0);
+                    let queue = &mut neighbor_candidates[node_id.0];
+                    let data = &mut queue.data;
+                    let priorities = &mut queue.priorities;
+                    let unsafe_neighbors: *mut NodeId = data.as_mut_ptr() as *mut NodeId;
 
-                        ptr::write(offset, distances);
+                    let unsafe_distances: *mut f32 = priorities.as_mut_ptr() as *mut f32;
+                    unsafe {
+                        let mut neighbor_offset =
+                            unsafe_neighbors.add(node_id.0 * neighborhood_size);
+                        let mut distance_offset =
+                            unsafe_distances.add(node_id.0 * neighborhood_size);
+
+                        for (i, (n, d)) in distances.iter().enumerate() {
+                            *neighbor_offset = *n;
+                            *distance_offset = *d;
+                        }
                     }
                 });
         });
 
-        // This was needed to reduce memory pressure
-        // we should *really* consider succinct data structures
-        let mut neighbor_candidates: Vec<(NodeId, f32)> =
-            vec![(NodeId(!0), f32::MAX); vs.len() * neighborhood_size];
         eprintln!("Making neighborhoods bidirectional");
         // 4. Make neighborhoods bidirectional
-        all_distances
-            .iter()
-            .enumerate()
-            .for_each(|(node, distances)| {
-                let node = NodeId(node);
-                distances.iter().for_each(|(neighbor, distance)| {
-                    if *neighbor != node {
-                        let start = neighbor.0 * neighborhood_size;
-                        let end = (neighbor.0 + 1) * neighborhood_size;
-                        insert_into_distances(
-                            (node, *distance),
-                            &mut neighbor_candidates[start..end],
-                        );
-                    }
-                })
-            });
-
-        // This neighbors array, despite seemingly immutable, is going
-        // to be mutated unsafely! However, each segment is logically
-        // independent and therefore safe.
-        let neighbors = vec![NodeId(!0); vs.len() * neighborhood_size];
-
-        eprintln!("Writing neighborhoods");
-        // 5. In parallel, write our own best neighbors, in order of
-        // distance, into our neighborhood array truncating to
-        // neighborhood size
-        all_distances
-            .par_iter_mut()
-            .enumerate()
-            .for_each(|(i, distances)| {
-                let start = i * neighborhood_size;
-                let end = (i + 1) * neighborhood_size;
-
-                distances.extend(neighbor_candidates[start..end].iter());
-                distances.sort_by_key(|d| (OrderedFloat(d.1), d.0));
-                distances.dedup();
-                distances.truncate(neighborhood_size);
-                // eprintln!("distances for {i}: {distances:?}");
-                // We know we have a unique index here that is not
-                // going to be contended. Therefore we just use
-                // unsafe.
-
-                let unsafe_neighbors: *mut NodeId = neighbors.as_ptr() as *mut NodeId;
-                (0..distances.len()).for_each(|j| unsafe {
-                    let offset = unsafe_neighbors.add(i * neighborhood_size + j);
-                    *offset = distances[j].0;
-                });
-            });
+        for i in 0..neighbor_candidates.len() {
+            let node = NodeId(i);
+            let neighborhood_copy: Vec<(NodeId, f32)> = neighbor_candidates[i].iter().collect();
+            for (neighbor, distance) in neighborhood_copy {
+                neighbor_candidates[neighbor.0].insert(node, distance);
+            }
+        }
 
         Layer {
             neighborhood_size,
@@ -1687,52 +1666,5 @@ mod tests {
             let results = hnsw.search(v, 9);
             assert_eq!(VectorId(i), results[0].0)
         }
-    }
-
-    #[test]
-    fn fixed_length_insertion() {
-        let mut v = vec![(NodeId(0), 1.2), (NodeId(3), 4.5), (NodeId(!0), f32::MAX)];
-        insert_into_distances((NodeId(4), 0.1), &mut v);
-        assert_eq!(
-            v,
-            vec![(NodeId(4), 0.1), (NodeId(0), 1.2), (NodeId(3), 4.5)]
-        );
-
-        let mut v = vec![
-            (NodeId(!0), f32::MAX),
-            (NodeId(!0), f32::MAX),
-            (NodeId(!0), f32::MAX),
-        ];
-        insert_into_distances((NodeId(4), 0.1), &mut v);
-        assert_eq!(
-            v,
-            vec![
-                (NodeId(4), 0.1),
-                (NodeId(18446744073709551615), 3.4028235e38),
-                (NodeId(18446744073709551615), 3.4028235e38)
-            ]
-        );
-
-        insert_into_distances((NodeId(4), 0.1), &mut v);
-        assert_eq!(
-            v,
-            vec![
-                (NodeId(4), 0.1),
-                (NodeId(18446744073709551615), 3.4028235e38),
-                (NodeId(18446744073709551615), 3.4028235e38)
-            ]
-        );
-        let mut v = vec![(NodeId(0), 0.1), (NodeId(3), 0.2), (NodeId(5), 0.3)];
-        insert_into_distances((NodeId(4), 0.4), &mut v);
-        assert_eq!(
-            v,
-            vec![(NodeId(0), 0.1), (NodeId(3), 0.2), (NodeId(5), 0.3),]
-        );
-        eprintln!("v: {v:?}");
-
-        let mut v = vec![(NodeId(0), 0.1), (NodeId(3), 0.2), (NodeId(5), 0.5)];
-        insert_into_distances((NodeId(4), 0.4), &mut v);
-        assert_eq!(v, [(NodeId(0), 0.1), (NodeId(3), 0.2), (NodeId(4), 0.4)]);
-        eprintln!("v: {v:?}");
     }
 }
