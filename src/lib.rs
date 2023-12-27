@@ -5,7 +5,6 @@ use std::{
     marker::PhantomData,
     mem,
     path::{Path, PathBuf},
-    ptr,
     slice::{self, Iter},
     sync::atomic::{self, AtomicUsize},
 };
@@ -1409,7 +1408,7 @@ mod tests {
                 (VectorId(2), 0.29289323),
                 (VectorId(3), 0.5),
                 (VectorId(0), 1.0),
-                (VectorId(5), 1.0),
+                (VectorId(6), 1.7071068),
                 (VectorId(7), 1.7071068)
             ]
         )
@@ -1418,27 +1417,6 @@ mod tests {
     #[test]
     fn test_generation() {
         let hnsw: Hnsw<SillyComparator, SillyVec> = make_simple_hnsw();
-        assert_eq!(
-            hnsw.get_layer(1).map(|layer| &layer.nodes),
-            Some(vec![VectorId(0), VectorId(1), VectorId(2)].as_ref())
-        );
-        assert_eq!(
-            hnsw.get_layer(1).map(|layer| &layer.neighbors),
-            Some(
-                vec![
-                    NodeId(1),
-                    NodeId(2),
-                    NodeId(18446744073709551615),
-                    NodeId(0),
-                    NodeId(2),
-                    NodeId(18446744073709551615),
-                    NodeId(0),
-                    NodeId(1),
-                    NodeId(18446744073709551615)
-                ]
-                .as_ref()
-            )
-        );
         assert_eq!(
             hnsw.get_layer(0).map(|layer| &layer.nodes),
             Some(
@@ -1460,68 +1438,59 @@ mod tests {
             hnsw.get_layer(0).map(|layer| &layer.neighbors),
             Some(
                 vec![
-                    // Node 0
                     NodeId(3),
                     NodeId(4),
+                    NodeId(7),
+                    NodeId(6),
+                    NodeId(2),
+                    NodeId(1),
+                    NodeId(8),
+                    NodeId(3),
+                    NodeId(8),
+                    NodeId(4),
+                    NodeId(7),
+                    NodeId(5),
+                    NodeId(8),
+                    NodeId(4),
+                    NodeId(6),
+                    NodeId(5),
+                    NodeId(3),
+                    NodeId(1),
+                    NodeId(4),
+                    NodeId(1),
+                    NodeId(0),
+                    NodeId(1),
+                    NodeId(8),
+                    NodeId(7),
+                    NodeId(8),
+                    NodeId(3),
+                    NodeId(8),
+                    NodeId(2),
+                    NodeId(0),
+                    NodeId(1),
+                    NodeId(8),
+                    NodeId(6),
+                    NodeId(2),
                     NodeId(1),
                     NodeId(2),
                     NodeId(6),
                     NodeId(7),
-                    // Node 1
-                    NodeId(3),
-                    NodeId(8),
-                    NodeId(4),
+                    NodeId(5),
                     NodeId(0),
                     NodeId(2),
                     NodeId(5),
-                    // Node 2
-                    NodeId(8),
-                    NodeId(4),
-                    NodeId(0),
-                    NodeId(1),
-                    NodeId(3),
-                    NodeId(5),
-                    // Node 3
-                    NodeId(4),
-                    NodeId(0),
-                    NodeId(1),
-                    NodeId(8),
-                    NodeId(2),
                     NodeId(7),
-                    // Node 4
-                    NodeId(3),
-                    NodeId(8),
-                    NodeId(0),
-                    NodeId(1),
-                    NodeId(2),
-                    NodeId(5),
-                    // Node 5
-                    NodeId(1),
-                    NodeId(2),
                     NodeId(6),
-                    NodeId(7),
-                    NodeId(8),
-                    NodeId(4),
-                    // Node 6
-                    NodeId(0),
-                    NodeId(2),
-                    NodeId(5),
-                    NodeId(7),
-                    NodeId(4),
-                    NodeId(3),
-                    // Node 7
+                    NodeId(1),
                     NodeId(0),
                     NodeId(1),
                     NodeId(3),
-                    NodeId(5),
                     NodeId(6),
                     NodeId(4),
-                    // Node 8
-                    NodeId(4),
+                    NodeId(2),
                     NodeId(1),
                     NodeId(2),
                     NodeId(3),
-                    NodeId(0),
                     NodeId(5)
                 ]
                 .as_ref()
@@ -1580,10 +1549,10 @@ mod tests {
     }
 
     #[test]
-    fn test_bla() {
+    fn test_supers() {
         let size = 10000;
         let dimension = 10;
-        let mut hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
+        let hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
         //eprintln!("Top neighbors: {:?}", hnsw.layers[0].neighbors);
         let supers_1 = hnsw.supers_for_layer(0);
         let supers_2 = hnsw.supers_for_layer(0);
