@@ -40,17 +40,17 @@ impl<'a, Id: PartialEq + Copy + EmptyValue> PriorityQueue<'a, Id> {
     }
 
     pub fn last(&'a self) -> Option<(Id, f32)> {
-        let past_last_idx = self
-            .priorities
-            .partition_point(|d| OrderedFloat(*d) != OrderedFloat(f32::MAX));
-        if past_last_idx == 0 {
+        let length = self.len();
+        if length == 0 {
             None
         } else {
-            Some((
-                self.data[past_last_idx - 1],
-                self.priorities[past_last_idx - 1],
-            ))
+            Some((self.data[length - 1], self.priorities[length - 1]))
         }
+    }
+
+    pub fn len(&self) -> usize {
+        self.priorities
+            .partition_point(|d| OrderedFloat(*d) != OrderedFloat(f32::MAX))
     }
 
     pub fn data(&'a self) -> &'a [Id] {
@@ -109,7 +109,7 @@ impl<'a, Id: PartialEq + Copy + EmptyValue> PriorityQueue<'a, Id> {
         did_something
     }
 
-    pub fn merge_from(&mut self, other: PriorityQueue<Id>) -> bool {
+    pub fn merge_from(&mut self, other: &PriorityQueue<Id>) -> bool {
         self.merge(&other.data, &other.priorities)
     }
 
@@ -238,7 +238,7 @@ mod tests {
         let mut priorities2 = vec![0.1, 0.3, 0.5];
         let priority_queue2 = PriorityQueue::from_slices(&mut data2, &mut priorities2);
 
-        priority_queue1.merge_from(priority_queue2);
+        priority_queue1.merge_from(&priority_queue2);
         assert_eq!(data1, vec![NodeId(0), NodeId(1), NodeId(2)]);
         assert_eq!(priorities1, vec![0.0, 0.1, 0.2]);
     }
@@ -264,7 +264,7 @@ mod tests {
 
         let priority_queue2 = PriorityQueue::from_slices(&mut data2, &mut priorities2);
 
-        let result = priority_queue.merge_from(priority_queue2);
+        let result = priority_queue.merge_from(&priority_queue2);
         assert!(!result);
         assert_eq!(data, vec![NodeId(0), NodeId(3), NodeId(5)]);
     }

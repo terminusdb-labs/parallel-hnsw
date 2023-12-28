@@ -132,11 +132,16 @@ impl<C: Comparator<T>, T> Layer<C, T> {
         let v = self.get_vector(n);
         let mut candidates = PriorityQueue::new(number_of_nodes);
         candidates.insert(n, f32::MAX);
-        self.closest_nodes(AbstractVector::Stored(v), &mut candidates);
+        self.closest_nodes(AbstractVector::Stored(v), &mut candidates, number_of_nodes);
         candidates.iter().collect()
     }
 
-    pub fn closest_nodes(&self, v: AbstractVector<T>, candidates: &mut PriorityQueue<NodeId>) {
+    pub fn closest_nodes(
+        &self,
+        v: AbstractVector<T>,
+        candidates: &mut PriorityQueue<NodeId>,
+        candidate_count: usize,
+    ) {
         assert!(!candidates.is_empty());
         let mut visit_queue: Vec<(NodeId, f32)> = candidates.iter().collect();
         visit_queue.reverse();
@@ -172,7 +177,7 @@ impl<C: Comparator<T>, T> Layer<C, T> {
 
             let did_something = candidates.merge_pairs(&neighbor_distances);
 
-            if !did_something {
+            if !did_something || candidates.len() == candidate_count {
                 break;
             }
             // Sort in reverse order
@@ -184,6 +189,7 @@ impl<C: Comparator<T>, T> Layer<C, T> {
         &self,
         v: AbstractVector<T>,
         candidates: &PriorityQueue<VectorId>,
+        candidate_count: usize,
     ) -> Vec<(VectorId, f32)> {
         let (mut candidate_vecs, mut candidate_distances): (Vec<_>, Vec<_>) = candidates
             .iter()
@@ -191,7 +197,7 @@ impl<C: Comparator<T>, T> Layer<C, T> {
             .map(|(v, d)| (self.get_node(v).unwrap(), d))
             .unzip();
         let mut queue = PriorityQueue::from_slices(&mut candidate_vecs, &mut candidate_distances);
-        self.closest_nodes(v, &mut queue);
+        self.closest_nodes(v, &mut queue, candidate_count);
         queue
             .iter()
             .map(|(node_id, distance)| (self.get_vector(node_id), distance))
@@ -448,9 +454,8 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
                     .compare_vec(v.clone(), AbstractVector::Stored(entry_vector))
             })
             .unwrap_or(0.0);
-        let mut candidates_queue = PriorityQueue::new(number_of_candidates);
-        candidates_queue.insert(entry_vector, distance_from_entry);
-        let mut candidate_queue_slice = candidate_queue.slice_to(1);
+        let mut candidates = PriorityQueue::new(number_of_candidates);
+        candidates.insert(entry_vector, distance_from_entry);
         for i in 0..layers.len() {
             let candidate_count = if layers.len() == 1 || i == layers.len() - 1 {
                 number_of_candidates
@@ -458,12 +463,14 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
                 upper_layer_candidate_count
             };
             let layer = &layers[i];
-            let closest = layer.as_ref().closest_vectors(v.clone(), &candidates_queue);
+            let closest = layer
+                .as_ref()
+                .closest_vectors(v.clone(), &candidates, candidate_count);
 
-            candidates_queue.merge_pairs(&closest);
+            candidates.merge_pairs(&closest);
         }
 
-        candidates_queue.iter().collect()
+        candidates.iter().collect()
     }
 }
 
