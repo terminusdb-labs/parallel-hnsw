@@ -146,11 +146,11 @@ impl<C: Comparator<T>, T> Layer<C, T> {
         let mut visit_queue: Vec<(NodeId, f32)> = candidates.iter().collect();
         visit_queue.reverse();
         let mut visited: HashSet<NodeId> = HashSet::new();
-        // eprintln!("------------------------------------");
-        // eprintln!("Initial visit queue: {visit_queue:?}");
+        eprintln!("------------------------------------");
+        eprintln!("Initial visit queue: {visit_queue:?}");
         while let Some((next, _)) = visit_queue.pop() {
-            // eprintln!("...");
-            // eprintln!("working with next: {next:?}");
+            eprintln!("...");
+            eprintln!("working with next: {next:?}");
             visited.insert(next);
             let neighbors = self.get_neighbors(next);
             let mut neighbor_distances: Vec<_> = neighbors
@@ -165,7 +165,7 @@ impl<C: Comparator<T>, T> Layer<C, T> {
                 .collect();
             neighbor_distances.sort_by_key(|(n, distance)| (OrderedFloat(*distance), *n));
 
-            // eprintln!("calculated neighbor_distances@{next:?}: {neighbor_distances:?}");
+            eprintln!("calculated neighbor_distances@{next:?}: {neighbor_distances:?}");
             visited.extend(neighbor_distances.iter().map(|(n, _)| n));
 
             let worst = candidates.last();
@@ -174,12 +174,19 @@ impl<C: Comparator<T>, T> Layer<C, T> {
                     .iter()
                     .filter(|(_, d)| worst.is_none() || worst.as_ref().unwrap().1 > *d),
             );
+            eprintln!("before");
+            dbg!(&candidates.data);
+            dbg!(&candidates.priorities);
 
-            let did_something = candidates.merge_pairs(&neighbor_distances);
+            let did_something = dbg!(candidates.merge_pairs(dbg!(&neighbor_distances)));
 
             if !did_something || candidates.len() == candidate_count {
                 break;
             }
+            eprintln!("after");
+            dbg!(&candidates.data);
+            dbg!(&candidates.priorities);
+
             // Sort in reverse order
             visit_queue.sort_by_key(|(n, distance)| (OrderedFloat(-*distance), *n))
         }
@@ -191,12 +198,14 @@ impl<C: Comparator<T>, T> Layer<C, T> {
         candidates: &PriorityQueue<VectorId>,
         candidate_count: usize,
     ) -> Vec<(VectorId, f32)> {
-        let (mut candidate_vecs, mut candidate_distances): (Vec<_>, Vec<_>) = candidates
+        let pairs: Vec<(NodeId, f32)> = candidates
             .iter()
             // We should only be proceeding downwards!
             .map(|(v, d)| (self.get_node(v).unwrap(), d))
-            .unzip();
-        let mut queue = PriorityQueue::from_slices(&mut candidate_vecs, &mut candidate_distances);
+            .collect();
+        eprintln!("pairs: {pairs:?}");
+        let mut queue = PriorityQueue::new(candidate_count);
+        queue.merge_pairs(&pairs);
         self.closest_nodes(v, &mut queue, candidate_count);
         queue
             .iter()
@@ -406,10 +415,13 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
             .map(|(node_id, vector_id)| {
                 let comparator = comparator.clone();
                 let initial_vector_distances = if layers.is_empty() {
+                    //eprintln!("empty layers");
                     HnswSearcher::compare_all(comparator, *vector_id, vs)
                 } else {
+                    //eprintln!("not empty layers");
                     self.initial_vector_distances(*vector_id, number_of_supers_to_check, layers)
                 };
+                //eprintln!("ivd: {initial_vector_distances:?}");
                 let initial_node_distances: Vec<_> = initial_vector_distances
                     .into_iter()
                     .map(|(vector_id, distance)| {
@@ -432,7 +444,7 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
         number_of_nodes: usize,
         layers: &[L],
     ) -> Vec<(VectorId, f32)> {
-        self.search_layers(AbstractVector::Stored(v), number_of_nodes, layers)
+        dbg!(self.search_layers(AbstractVector::Stored(v), dbg!(number_of_nodes), layers))
             .into_iter()
             .filter(|(w, _)| v != *w)
             .collect::<Vec<_>>()
@@ -463,10 +475,11 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
                 upper_layer_candidate_count
             };
             let layer = &layers[i];
-            let closest = layer
-                .as_ref()
-                .closest_vectors(v.clone(), &candidates, candidate_count);
-
+            let closest =
+                layer
+                    .as_ref()
+                    .closest_vectors(v.clone(), &candidates, dbg!(candidate_count));
+            eprintln!("closest: {closest:?}");
             candidates.merge_pairs(&closest);
         }
 
@@ -611,6 +624,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                         .filter(|(n, _d)| node_id != n)
                         .take(neighborhood_size)
                         .unzip();
+                    eprintln!("nodes@{node_id:?}: {nodes:?}");
                     nodes.resize_with(neighborhood_size, || NodeId(!0));
                     distances.resize_with(neighborhood_size, || f32::MAX);
 
@@ -649,7 +663,9 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 .iter()
                 .filter(|(n, _)| n.0 != !0)
                 .collect();
+            eprintln!("{neighborhood_copy:?}");
             for (neighbor, distance) in neighborhood_copy {
+                eprintln!("inserting into: {}", neighbor.0);
                 neighbor_candidates[neighbor.0].insert(node, distance);
             }
         }
@@ -1436,62 +1452,63 @@ mod tests {
                 vec![
                     NodeId(3),
                     NodeId(4),
-                    NodeId(7),
-                    NodeId(6),
+                    NodeId(1),
                     NodeId(2),
-                    NodeId(1),
-                    NodeId(8),
-                    NodeId(3),
-                    NodeId(8),
-                    NodeId(4),
-                    NodeId(7),
-                    NodeId(5),
-                    NodeId(8),
-                    NodeId(4),
                     NodeId(6),
-                    NodeId(5),
+                    NodeId(7),
                     NodeId(3),
-                    NodeId(1),
+                    NodeId(8),
                     NodeId(4),
+                    NodeId(0),
+                    NodeId(2),
+                    NodeId(5),
+                    NodeId(8),
+                    NodeId(4),
+                    NodeId(0),
                     NodeId(1),
+                    NodeId(3),
+                    NodeId(5),
+                    NodeId(4),
                     NodeId(0),
                     NodeId(1),
                     NodeId(8),
+                    NodeId(2),
                     NodeId(7),
-                    NodeId(8),
                     NodeId(3),
                     NodeId(8),
-                    NodeId(2),
                     NodeId(0),
                     NodeId(1),
-                    NodeId(8),
-                    NodeId(6),
                     NodeId(2),
+                    NodeId(5),
                     NodeId(1),
                     NodeId(2),
                     NodeId(6),
-                    NodeId(7),
-                    NodeId(5),
+                    NodeId(8),
+                    NodeId(4),
+                    NodeId(3),
                     NodeId(0),
                     NodeId(2),
                     NodeId(5),
                     NodeId(7),
-                    NodeId(6),
-                    NodeId(1),
+                    NodeId(4),
+                    NodeId(3),
                     NodeId(0),
                     NodeId(1),
                     NodeId(3),
                     NodeId(6),
                     NodeId(4),
-                    NodeId(2),
+                    NodeId(8),
+                    NodeId(4),
                     NodeId(1),
                     NodeId(2),
                     NodeId(3),
+                    NodeId(0),
                     NodeId(5)
                 ]
                 .as_ref()
             )
         );
+        panic!();
     }
 
     #[test]
@@ -1501,6 +1518,7 @@ mod tests {
         for (i, datum) in data.iter().enumerate() {
             let v = AbstractVector::Unstored(datum);
             let results = hnsw.search(v, 9);
+            eprintln!("results: {results:?}");
             assert_eq!(VectorId(i), results[0].0)
         }
     }

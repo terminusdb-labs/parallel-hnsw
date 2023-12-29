@@ -1,5 +1,6 @@
 use crate::OrderedFloat;
 
+#[derive(Debug)]
 pub enum VecOrSlice<'a, T> {
     Vec(Vec<T>),
     Slice(&'a mut [T]),
@@ -34,7 +35,7 @@ pub trait EmptyValue {
     fn empty() -> Self;
 }
 
-impl<'a, Id: PartialEq + Copy + EmptyValue> PriorityQueue<'a, Id> {
+impl<'a, Id: PartialOrd + PartialEq + Copy + EmptyValue> PriorityQueue<'a, Id> {
     pub fn is_empty(&'a self) -> bool {
         self.data.len() == 0 || self.data[0].is_empty()
     }
@@ -57,8 +58,21 @@ impl<'a, Id: PartialEq + Copy + EmptyValue> PriorityQueue<'a, Id> {
         &self.data
     }
 
-    fn insert_at(&mut self, idx: usize, elt: Id, priority: f32) {
+    // Retuns the actual insertion point
+    fn insert_at(&mut self, idx: usize, elt: Id, priority: f32) -> usize {
+        let mut idx = idx;
         if idx < self.data.len() && self.data[idx] != elt {
+            // walk through all elements with exactly the same priority as us
+            while self.priorities[idx] == priority && self.data[idx] <= elt {
+                // return ourselves if we're already there.
+                if self.data[idx] == elt {
+                    return idx;
+                }
+                idx += 1;
+                if idx == self.priorities.len() {
+                    return idx;
+                }
+            }
             let data = &mut self.data;
             let priorities = &mut self.priorities;
             let swap_start =
@@ -74,34 +88,49 @@ impl<'a, Id: PartialEq + Copy + EmptyValue> PriorityQueue<'a, Id> {
             data[idx] = elt;
             priorities[idx] = priority;
         }
+        idx
     }
 
-    pub fn insert(&mut self, elt: Id, priority: f32) {
+    pub fn insert(&mut self, elt: Id, priority: f32) -> usize {
         let idx = self
             .priorities
             .partition_point(|d| OrderedFloat(*d) < OrderedFloat(priority));
-        self.insert_at(idx, elt, priority);
+        self.insert_at(idx, elt, priority)
     }
 
     pub fn merge<'b>(&mut self, other_data: &'b [Id], other_priority: &'b [f32]) -> bool {
         let mut did_something = false;
         let mut last_idx = 0;
         for (other_idx, other_distance) in other_priority.iter().enumerate() {
+            if last_idx > self.priorities.len() {
+                break;
+            }
             let i = self.priorities[last_idx..]
                 .binary_search_by(|d0| OrderedFloat(*d0).cmp(&OrderedFloat(*other_distance)));
             match i {
                 Ok(i) => {
-                    self.insert_at(i, other_data[other_idx], *other_distance);
-                    did_something = true;
-                    last_idx = i;
+                    // We need to walk to the beginning of the match
+                    let mut start_idx = i + last_idx;
+                    while start_idx != 0 {
+                        if self.priorities[start_idx - 1] != *other_distance {
+                            break;
+                        } else {
+                            dbg!(start_idx -= 1);
+                        }
+                    }
+                    last_idx = self.insert_at(start_idx, other_data[other_idx], *other_distance);
+                    did_something = last_idx != self.data.len();
                 }
                 Err(i) => {
                     if i >= self.data.len() {
                         break;
                     } else {
-                        self.insert_at(i + last_idx, other_data[other_idx], *other_distance);
+                        last_idx = dbg!(self.insert_at(
+                            i + last_idx,
+                            other_data[other_idx],
+                            *other_distance
+                        ));
                         did_something = true;
-                        last_idx = i;
                     }
                 }
             }
@@ -281,5 +310,104 @@ mod tests {
         let result = priority_queue.merge_pairs(&pairs);
         assert!(result);
         assert_eq!(data, vec![NodeId(0), NodeId(1), NodeId(2)]);
+        assert_eq!(priorities, vec![0.0, 0.1, 0.2]);
+    }
+
+    #[test]
+    fn repeated_merge() {
+        let mut data = vec![NodeId(0), NodeId(3), NodeId(5)];
+        let mut priorities = vec![0.0, 0.0, 0.0];
+
+        let mut priority_queue = PriorityQueue::from_slices(&mut data, &mut priorities);
+
+        let pairs = vec![(NodeId(0), 0.0), (NodeId(4), 0.0), (NodeId(3), 0.0)];
+
+        let result = priority_queue.merge_pairs(&pairs);
+        assert!(result);
+        assert_eq!(data, vec![NodeId(0), NodeId(3), NodeId(4)]);
+        assert_eq!(priorities, vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn merge_with_empty() {
+        // At beginning
+        let mut data = vec![NodeId(0), NodeId(3), NodeId(!0)];
+        let mut priorities = vec![0.0, 1.2, f32::MAX];
+        let mut priority_queue = PriorityQueue::from_slices(&mut data, &mut priorities);
+
+        let pairs = vec![(NodeId(0), 0.0), (NodeId(3), 0.0), (NodeId(4), 0.0)];
+
+        let result = priority_queue.merge_pairs(&pairs);
+        assert!(result);
+        assert_eq!(data, vec![NodeId(0), NodeId(3), NodeId(4)]);
+        assert_eq!(priorities, vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn lots_of_zeros() {
+        let mut n1 = vec![
+            NodeId(0),
+            NodeId(18446744073709551615),
+            NodeId(18446744073709551615),
+            NodeId(18446744073709551615),
+            NodeId(18446744073709551615),
+            NodeId(18446744073709551615),
+            NodeId(18446744073709551615),
+            NodeId(18446744073709551615),
+            NodeId(18446744073709551615),
+        ];
+        let mut p1 = vec![
+            0.0,
+            3.4028235e38,
+            3.4028235e38,
+            3.4028235e38,
+            3.4028235e38,
+            3.4028235e38,
+            3.4028235e38,
+            3.4028235e38,
+            3.4028235e38,
+        ];
+
+        let mut priority_queue = PriorityQueue::from_slices(&mut n1, &mut p1);
+
+        let pairs = vec![
+            (NodeId(3), 0.29289323),
+            (NodeId(4), 0.4227),
+            (NodeId(1), 1.0),
+            (NodeId(2), 1.0),
+            (NodeId(6), 1.0),
+            (NodeId(7), 1.0),
+        ];
+
+        let result = priority_queue.merge_pairs(&pairs);
+        assert!(result);
+        assert_eq!(
+            n1,
+            vec![
+                NodeId(0),
+                NodeId(3),
+                NodeId(4),
+                NodeId(1),
+                NodeId(2),
+                NodeId(6),
+                NodeId(7),
+                NodeId(18446744073709551615),
+                NodeId(18446744073709551615)
+            ]
+        );
+        assert_eq!(
+            p1,
+            vec![
+                0.0,
+                0.29289323,
+                0.4227,
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                3.4028235e38,
+                3.4028235e38
+            ]
+        );
     }
 }
