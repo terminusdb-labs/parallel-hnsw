@@ -541,7 +541,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         neighborhood_size: usize,
     ) -> Layer<C, T> {
         // Parameter for the number of neighbours to look at from the proceeding layer.
-        let number_of_supers_to_check = 5; // neighborhood_size;
+        let number_of_supers_to_check = 6; //neighborhood_size;
 
         eprintln!("Constructing neighorhood data structure");
         // This is the final neighbors array, we are going to slice it up here
