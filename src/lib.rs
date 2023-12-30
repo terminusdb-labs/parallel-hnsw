@@ -921,6 +921,58 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             .unwrap_or_default()
     }
 
+    pub fn supers_for_node_for_layer(&self, n: NodeId, layer_id: usize) -> Vec<NodeId> {
+        let layer = self.get_layer(layer_id).unwrap();
+        let supers = self.supers_for_layer(layer_id);
+        layer.supers_for_node(n, supers)
+    }
+
+    pub fn super_counts_for_layer(&self, layer_id: usize) -> Vec<usize> {
+        let layer = self.get_layer(layer_id).unwrap();
+        let supers = self.supers_for_layer(layer_id);
+        let mut result = Vec::with_capacity(layer.node_count());
+        for i in 0..layer.node_count() {
+            result.push(layer.supers_for_node(NodeId(i), supers).len())
+        }
+        result
+    }
+
+    pub fn fix_neighborhoods(&self, layer_id: usize) {
+        let layer = self.get_layer(layer_id).unwrap();
+        let supers = self.supers_for_layer(layer_id);
+        eprintln!("supers start at: {}", supers.len());
+
+        for i in 0..layer.node_count() {
+            let n = NodeId(i);
+            let v = layer.get_vector(n);
+            let neighbor_distances = layer.get_neighbor_distances(n);
+            let sups = layer.supers_for_node(n, supers);
+            let count = sups.len();
+            if count == 0 {
+                for sup in supers {
+                    let sup_node = layer.get_node(*sup).unwrap();
+                    let distance = layer
+                        .comparator
+                        .compare_vec(AbstractVector::Stored(v), AbstractVector::Stored(*sup));
+                    let idx = neighbor_distances
+                        .partition_point(|(_, d)| OrderedFloat(*d) < OrderedFloat(distance));
+                    if idx < neighbor_distances.len() {
+                        eprintln!("found a better candidate for {i} {} out of {count}", sup.0);
+                        let others_distances = layer.get_neighbor_distances(sup_node);
+                        let idx2 = neighbor_distances
+                            .partition_point(|(_, d)| OrderedFloat(*d) < OrderedFloat(distance));
+                        if idx2 < others_distances.len() {
+                            insert_into_distances((n, distance), layer.get_neighbors_mut(sup_node));
+                            eprintln!("we can insert ourselves!");
+                        } else {
+                            eprintln!("No eviction possible");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn extend_layer(&mut self, layer_id: usize, vecs: Vec<VectorId>) {
         let layer_id_from_top = self.layer_count() - layer_id - 1;
         eprintln!("Extending layer: {layer_id:?}");
