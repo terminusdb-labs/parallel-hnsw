@@ -132,25 +132,20 @@ impl<C: Comparator<T>, T> Layer<C, T> {
         let v = self.get_vector(n);
         let mut candidates = PriorityQueue::new(number_of_nodes);
         candidates.insert(n, f32::MAX);
-        self.closest_nodes(AbstractVector::Stored(v), &mut candidates, number_of_nodes);
+        self.closest_nodes(AbstractVector::Stored(v), &mut candidates);
         candidates.iter().collect()
     }
 
-    pub fn closest_nodes(
-        &self,
-        v: AbstractVector<T>,
-        candidates: &mut PriorityQueue<NodeId>,
-        candidate_count: usize,
-    ) {
+    pub fn closest_nodes(&self, v: AbstractVector<T>, candidates: &mut PriorityQueue<NodeId>) {
         assert!(!candidates.is_empty());
         let mut visit_queue: Vec<(NodeId, f32)> = candidates.iter().collect();
         visit_queue.reverse();
         let mut visited: HashSet<NodeId> = HashSet::new();
-        eprintln!("------------------------------------");
-        eprintln!("Initial visit queue: {visit_queue:?}");
+        //eprintln!("------------------------------------");
+        //eprintln!("Initial visit queue: {visit_queue:?}");
         while let Some((next, _)) = visit_queue.pop() {
-            eprintln!("...");
-            eprintln!("working with next: {next:?}");
+            //eprintln!("...");
+            //eprintln!("working with next: {next:?}");
             visited.insert(next);
             let neighbors = self.get_neighbors(next);
             let mut neighbor_distances: Vec<_> = neighbors
@@ -165,7 +160,7 @@ impl<C: Comparator<T>, T> Layer<C, T> {
                 .collect();
             neighbor_distances.sort_by_key(|(n, distance)| (OrderedFloat(*distance), *n));
 
-            eprintln!("calculated neighbor_distances@{next:?}: {neighbor_distances:?}");
+            //eprintln!("calculated neighbor_distances@{next:?}: {neighbor_distances:?}");
             visited.extend(neighbor_distances.iter().map(|(n, _)| n));
 
             let worst = candidates.last();
@@ -174,18 +169,18 @@ impl<C: Comparator<T>, T> Layer<C, T> {
                     .iter()
                     .filter(|(_, d)| worst.is_none() || worst.as_ref().unwrap().1 > *d),
             );
-            eprintln!("before");
-            dbg!(&candidates.data);
-            dbg!(&candidates.priorities);
+            //eprintln!("before");
+            //dbg!(&candidates.data);
+            //dbg!(&candidates.priorities);
 
-            let did_something = dbg!(candidates.merge_pairs(dbg!(&neighbor_distances)));
+            let did_something = candidates.merge_pairs(&neighbor_distances);
+            //eprintln!("after");
 
-            if !did_something || candidates.len() == candidate_count {
+            if !did_something {
                 break;
             }
-            eprintln!("after");
-            dbg!(&candidates.data);
-            dbg!(&candidates.priorities);
+            //dbg!(&candidates.data);
+            //dbg!(&candidates.priorities);
 
             // Sort in reverse order
             visit_queue.sort_by_key(|(n, distance)| (OrderedFloat(-*distance), *n))
@@ -203,10 +198,10 @@ impl<C: Comparator<T>, T> Layer<C, T> {
             // We should only be proceeding downwards!
             .map(|(v, d)| (self.get_node(v).unwrap(), d))
             .collect();
-        eprintln!("pairs: {pairs:?}");
+        //eprintln!("pairs: {pairs:?}");
         let mut queue = PriorityQueue::new(candidate_count);
         queue.merge_pairs(&pairs);
-        self.closest_nodes(v, &mut queue, candidate_count);
+        self.closest_nodes(v, &mut queue);
         queue
             .iter()
             .map(|(node_id, distance)| (self.get_vector(node_id), distance))
@@ -444,7 +439,7 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
         number_of_nodes: usize,
         layers: &[L],
     ) -> Vec<(VectorId, f32)> {
-        dbg!(self.search_layers(AbstractVector::Stored(v), dbg!(number_of_nodes), layers))
+        self.search_layers(AbstractVector::Stored(v), number_of_nodes, layers)
             .into_iter()
             .filter(|(w, _)| v != *w)
             .collect::<Vec<_>>()
@@ -475,11 +470,10 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
                 upper_layer_candidate_count
             };
             let layer = &layers[i];
-            let closest =
-                layer
-                    .as_ref()
-                    .closest_vectors(v.clone(), &candidates, dbg!(candidate_count));
-            eprintln!("closest: {closest:?}");
+            let closest = layer
+                .as_ref()
+                .closest_vectors(v.clone(), &candidates, candidate_count);
+            //eprintln!("closest: {closest:?}");
             candidates.merge_pairs(&closest);
         }
 
@@ -624,7 +618,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                         .filter(|(n, _d)| node_id != n)
                         .take(neighborhood_size)
                         .unzip();
-                    eprintln!("nodes@{node_id:?}: {nodes:?}");
+                    //eprintln!("nodes@{node_id:?}: {nodes:?}");
                     nodes.resize_with(neighborhood_size, || NodeId(!0));
                     distances.resize_with(neighborhood_size, || f32::MAX);
 
@@ -663,9 +657,9 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 .iter()
                 .filter(|(n, _)| n.0 != !0)
                 .collect();
-            eprintln!("{neighborhood_copy:?}");
+            //eprintln!("{neighborhood_copy:?}");
             for (neighbor, distance) in neighborhood_copy {
-                eprintln!("inserting into: {}", neighbor.0);
+                //eprintln!("inserting into: {}", neighbor.0);
                 neighbor_candidates[neighbor.0].insert(node, distance);
             }
         }
@@ -1420,9 +1414,10 @@ mod tests {
                 (VectorId(2), 0.29289323),
                 (VectorId(3), 0.5),
                 (VectorId(0), 1.0),
+                (VectorId(5), 1.0),
                 (VectorId(6), 1.7071068),
                 (VectorId(7), 1.7071068)
-            ]
+            ],
         )
     }
 
@@ -1508,7 +1503,6 @@ mod tests {
                 .as_ref()
             )
         );
-        panic!();
     }
 
     #[test]
@@ -1584,6 +1578,7 @@ mod tests {
         assert_eq!(v1, v2);
         panic!();
     }
+
     #[test]
     fn test_recall() {
         let size = 10000;
@@ -1620,7 +1615,7 @@ mod tests {
         let nodes = &hnsw.layers[1].nodes;
         eprintln!("nodes at 1 {:?}", nodes);
          */
-        let v = 2706;
+        let v = 9075;
         let n = hnsw.layers[2].get_node(VectorId(v)).unwrap();
         let nhs = hnsw.layers[2].neighborhood_size;
         let neighbors = &hnsw.layers[2].neighbors[n.0 * nhs..(n.0 + 1) * nhs];

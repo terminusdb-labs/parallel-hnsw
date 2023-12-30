@@ -115,7 +115,7 @@ impl<'a, Id: PartialOrd + PartialEq + Copy + EmptyValue> PriorityQueue<'a, Id> {
                         if self.priorities[start_idx - 1] != *other_distance {
                             break;
                         } else {
-                            dbg!(start_idx -= 1);
+                            start_idx -= 1;
                         }
                     }
                     last_idx = self.insert_at(start_idx, other_data[other_idx], *other_distance);
@@ -125,11 +125,8 @@ impl<'a, Id: PartialOrd + PartialEq + Copy + EmptyValue> PriorityQueue<'a, Id> {
                     if i >= self.data.len() {
                         break;
                     } else {
-                        last_idx = dbg!(self.insert_at(
-                            i + last_idx,
-                            other_data[other_idx],
-                            *other_distance
-                        ));
+                        last_idx =
+                            self.insert_at(i + last_idx, other_data[other_idx], *other_distance);
                         did_something = true;
                     }
                 }
