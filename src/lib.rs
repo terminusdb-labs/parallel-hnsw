@@ -330,6 +330,16 @@ impl<C: Comparator<T>, T> Layer<C, T> {
             .take(total)
             .collect()
     }
+
+    pub fn supers_for_node(&self, node: NodeId, supers: &[VectorId]) -> Vec<NodeId> {
+        self.get_neighbors(node)
+            .iter()
+            .filter(|n| **n != NodeId(!0))
+            .map(|n| (*n, self.get_vector(*n)))
+            .filter(|(_, v)| supers.iter().any(|v2| v2 == v))
+            .map(|(n, _)| n)
+            .collect()
+    }
 }
 
 struct AtomicNodeDistance {
