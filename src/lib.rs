@@ -1588,7 +1588,7 @@ mod tests {
         eprintln!("nodes at 0 {:?}", nodes);
         let neighbors = &hnsw.layers[0].neighbors;
         eprintln!("neighbors at 0 {:?}", neighbors);
-        do_test_recall(&hnsw, 0.999);
+        do_test_recall(&hnsw, 1.0);
         //eprintln!("Top nodes: {:?}", hnsw.layers[0].nodes);
         //eprintln!("Top neighbors: {:?}", hnsw.layers[0].neighbors);
         hnsw.improve_index();
