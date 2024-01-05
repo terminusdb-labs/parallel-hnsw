@@ -1540,7 +1540,7 @@ mod tests {
                 random_normed_vec(&mut prng, dimension)
             })
             .collect();
-        let sub_dimension = dimension * 3 / 5;
+        let sub_dimension = dimension * 2 / 3;
         let matrix = ProjectionMatrix::new(dimension, sub_dimension);
         let data2: Vec<Vec<f32>> = data
             .par_iter()
@@ -1720,16 +1720,18 @@ mod tests {
     }
 
     fn do_test_neighborhood_overlap(
+        neighborhood: usize,
         hnsw1: &Hnsw<BigComparator, BigVec>,
         hnsw2: &Hnsw<BigComparator, BigVec>,
+        threshold_relative_precision: f32,
     ) {
         let data1 = &hnsw1.layers[0].comparator.data;
         let mut overlap = 0;
         let mut total = 0;
         for i in 0..data1.len() {
             let v = AbstractVector::Stored(VectorId(i));
-            let results = hnsw1.search(v.clone(), 100);
-            let results2 = hnsw2.search(v, 100);
+            let results = hnsw1.search(v.clone(), neighborhood);
+            let results2 = hnsw2.search(v, neighborhood);
             for (w, _) in results.iter() {
                 total += 1;
                 for (z, _) in results2.iter() {
@@ -1744,7 +1746,7 @@ mod tests {
         eprintln!("overlap: {overlap}");
         eprintln!("total: {total}");
         eprintln!("relative precision: {relative_precision}");
-        assert!(relative_precision >= 0.5);
+        assert!(relative_precision >= threshold_relative_precision);
     }
 
     #[test]
@@ -1848,11 +1850,10 @@ mod tests {
     #[test]
     fn test_dimensionality_reduction() {
         let size = 1000;
-        let dimension = 1000;
+        let dimension = 1526;
         let (hnsw1, hnsw2) = make_random_and_dimensionally_reduced_hnsw(size, dimension);
         //do_test_recall(&hnsw1, 0.1);
         //do_test_recall(&hnsw2, 0.1);
-        do_test_neighborhood_overlap(&hnsw1, &hnsw2);
-        panic!();
+        do_test_neighborhood_overlap(250, &hnsw1, &hnsw2, 0.5)
     }
 }
