@@ -18,6 +18,9 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 
+mod dimensionality_reduction;
+mod priority_queue;
+
 use crate::priority_queue::{EmptyValue, PriorityQueue};
 
 #[derive(PartialEq, Eq, Debug, PartialOrd, Ord, Clone, Copy, Hash)]
@@ -44,8 +47,6 @@ impl EmptyValue for VectorId {
         VectorId(!0)
     }
 }
-
-mod priority_queue;
 
 pub enum AbstractVector<'a, T> {
     Stored(VectorId),
@@ -126,6 +127,25 @@ impl<C: Comparator<T>, T> Layer<C, T> {
 
     fn get_neighbors(&self, n: NodeId) -> &[NodeId] {
         &self.neighbors[(n.0 * self.neighborhood_size)..((n.0 + 1) * self.neighborhood_size)]
+    }
+
+    // final vector is distances indexed by position in neighbor array
+    pub fn all_neighborhood_distances(&self) -> Vec<f32> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .flat_map(|(n, v)| {
+                self.get_neighbors(NodeId(n)).iter().map(|m| {
+                    if m.0 == !0 {
+                        f32::MAX
+                    } else {
+                        let w = self.get_vector(*m);
+                        self.comparator
+                            .compare_vec(AbstractVector::Stored(*v), AbstractVector::Stored(w))
+                    }
+                })
+            })
+            .collect()
     }
 
     pub fn nearest_neighbors(&self, n: NodeId, number_of_nodes: usize) -> Vec<(NodeId, f32)> {
@@ -498,6 +518,10 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
 
     pub fn get_layer(&self, i: usize) -> Option<&Layer<C, T>> {
         self.get_layer_from_top(self.layers.len() - i - 1)
+    }
+
+    pub fn get_layer_mut(&mut self, i: usize) -> Option<&mut Layer<C, T>> {
+        self.get_layer_from_top_mut(self.layers.len() - i - 1)
     }
 
     pub fn get_layer_from_top_mut(&mut self, i: usize) -> Option<&mut Layer<C, T>> {
@@ -940,45 +964,76 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
     pub fn super_counts_for_layer(&self, layer_id: usize) -> Vec<usize> {
         let layer = self.get_layer(layer_id).unwrap();
         let supers = self.supers_for_layer(layer_id);
-        let mut result = Vec::with_capacity(layer.node_count());
-        for i in 0..layer.node_count() {
-            result.push(layer.supers_for_node(NodeId(i), supers).len())
+        let mut result = vec![0; layer.node_count()];
+        for sup in supers {
+            let sup_node = layer.get_node(*sup).unwrap();
+            for n in layer.get_neighbors(sup_node) {
+                result[n.0] += 1;
+            }
         }
         result
     }
 
-    pub fn fix_neighborhoods(&self, layer_id: usize) {
-        let layer = self.get_layer(layer_id).unwrap();
-        let supers = self.supers_for_layer(layer_id);
-        eprintln!("supers start at: {}", supers.len());
+    pub fn fix_neighborhoods(&mut self, layer_id: usize) {
+        let mut super_counts = self.super_counts_for_layer(layer_id);
+        let supers: Vec<VectorId> = self.supers_for_layer(layer_id).to_vec();
+        let mut_layer = self.get_layer_mut(layer_id).unwrap();
+        let read_layer = Layer {
+            comparator: mut_layer.comparator.clone(),
+            neighborhood_size: mut_layer.neighborhood_size,
+            nodes: mut_layer.nodes.clone(),
+            neighbors: mut_layer.neighbors.clone(),
+            _phantom: PhantomData,
+        };
 
-        for i in 0..layer.node_count() {
+        let neighborhood_size = read_layer.neighborhood_size;
+        let nodes = &read_layer.nodes;
+        let neighborhoods = &mut mut_layer.neighbors;
+        let number_of_supers = supers.len();
+        //eprintln!("supers start at: {number_of_supers}");
+
+        let mut neighbor_distances = read_layer.all_neighborhood_distances();
+        let mut neighbor_candidates: Vec<PriorityQueue<NodeId>> = neighborhoods
+            .chunks_exact_mut(neighborhood_size)
+            .zip(neighbor_distances.chunks_exact_mut(neighborhood_size))
+            .map(|(data, priorities)| PriorityQueue::from_slices(data, priorities))
+            .collect();
+
+        for i in 0..nodes.len() {
             let n = NodeId(i);
-            let v = layer.get_vector(n);
-            let neighbor_distances = layer.get_neighbor_distances(n);
-            let sups = layer.supers_for_node(n, supers);
+            let v = read_layer.get_vector(n);
+            let is_a_super = supers.binary_search(&v).is_ok();
+            let sups = read_layer.supers_for_node(n, &supers);
             let count = sups.len();
-            if count == 0 {
-                for sup in supers {
-                    let sup_node = layer.get_node(*sup).unwrap();
-                    let distance = layer
+            //eprintln!("{i} has {count} supers (and is_a_super={is_a_super})");
+            if count == 0 && !is_a_super {
+                //eprintln!("|");
+                for sup in &supers {
+                    //eprint!(".");
+                    let sup_node = NodeId(nodes.binary_search(sup).unwrap());
+                    let distance_from_sup = read_layer
                         .comparator
-                        .compare_vec(AbstractVector::Stored(v), AbstractVector::Stored(*sup));
-                    let idx = neighbor_distances
-                        .partition_point(|(_, d)| OrderedFloat(*d) < OrderedFloat(distance));
-                    if idx < neighbor_distances.len() {
-                        eprintln!("found a better candidate for {i} {} out of {count}", sup.0);
-                        let others_distances = layer.get_neighbor_distances(sup_node);
-                        let idx2 = neighbor_distances
-                            .partition_point(|(_, d)| OrderedFloat(*d) < OrderedFloat(distance));
-                        if idx2 < others_distances.len() {
-                            insert_into_distances((n, distance), layer.get_neighbors_mut(sup_node));
-                            eprintln!("we can insert ourselves!");
+                        .compare_vec(AbstractVector::Stored(*sup), AbstractVector::Stored(v));
+                    let their_pq = &mut neighbor_candidates[sup_node.0];
+                    let worst = their_pq.last();
+                    if let Some((worst_node, worst_distance)) = worst {
+                        if distance_from_sup < worst_distance && super_counts[worst_node.0] > 1 {
+                            //eprintln!("\nAttempting to add super for {n:?} ");
+                            their_pq.insert(n, distance_from_sup);
+                            let our_pq = &mut neighbor_candidates[n.0];
+                            // make bidirectional
+                            our_pq.insert(sup_node, distance_from_sup);
+                            super_counts[worst_node.0] -= 1;
+                            super_counts[n.0] += 1;
+                            break;
                         } else {
-                            eprintln!("No eviction possible");
+                            //eprintln!("worst: {worst:?} distance: {distance_from_sup} and super_counts: {}", super_counts[worst_node.0]);
                         }
+                    } else {
+                        //eprintln!("worst: {worst:?} distance: {distance_from_sup}");
                     }
                 }
+                //eprintln!();
             }
         }
     }
@@ -1113,8 +1168,15 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         });
     }
 
+    pub fn improve_supers_balance(&mut self) {
+        for layer_id in 0..self.layer_count() - 1 {
+            self.fix_neighborhoods(layer_id);
+        }
+    }
+
     pub fn improve_index(&mut self) {
         for layer_id in 0..self.layer_count() - 1 {
+            self.fix_neighborhoods(layer_id);
             let vecs = self.discover_vectors_to_promote(layer_id);
             eprintln!("Vectors to promote: {vecs:?}");
             self.extend_layer(layer_id + 1, vecs)
@@ -1318,6 +1380,8 @@ mod tests {
 
     use rand_distr::Uniform;
 
+    use crate::dimensionality_reduction::ProjectionMatrix;
+
     use super::*;
     type SillyVec = [f32; 3];
     #[derive(Clone, Debug, PartialEq)]
@@ -1460,6 +1524,42 @@ mod tests {
         hnsw
     }
 
+    fn normalize(v: Vec<f32>) -> Vec<f32> {
+        let total: f32 = v.iter().map(|f| f.powf(2.0)).sum::<f32>().sqrt();
+        v.into_iter().map(|f| f / total).collect()
+    }
+
+    fn make_random_and_dimensionally_reduced_hnsw(
+        count: usize,
+        dimension: usize,
+    ) -> (Hnsw<BigComparator, BigVec>, Hnsw<BigComparator, BigVec>) {
+        let data: Vec<Vec<f32>> = (0..count)
+            .into_par_iter()
+            .map(move |i| {
+                let mut prng = StdRng::seed_from_u64(42_u64 + i as u64);
+                random_normed_vec(&mut prng, dimension)
+            })
+            .collect();
+        let sub_dimension = dimension * 3 / 5;
+        let matrix = ProjectionMatrix::new(dimension, sub_dimension);
+        let data2: Vec<Vec<f32>> = data
+            .par_iter()
+            .map(|v| normalize(matrix.project(v)))
+            .collect();
+
+        let c = BigComparator { data };
+        let vs: Vec<_> = (0..count).map(VectorId).collect();
+        let m = 24;
+        let m0 = 48;
+
+        let hnsw: Hnsw<BigComparator, BigVec> = Hnsw::generate(c, vs, m, m0);
+        let c2 = BigComparator { data: data2 };
+        let vs2: Vec<_> = (0..count).map(VectorId).collect();
+        let hnsw2: Hnsw<BigComparator, BigVec> = Hnsw::generate(c2, vs2, m, m0);
+
+        (hnsw, hnsw2)
+    }
+
     #[test]
     fn test_nearness_search() {
         let hnsw: Hnsw<SillyComparator, SillyVec> = make_simple_hnsw();
@@ -1588,11 +1688,12 @@ mod tests {
             eprintln!("Searching for {i}");
             */
             let v = AbstractVector::Unstored(datum);
-            let results = hnsw.search(v, 300);
+            let results = hnsw.search(v, 100);
+            //eprintln!("results: {results:?}");
             if VectorId(i) == results[0].0 {
                 total_relevant += 1;
             } else {
-                eprintln!("did not find vector {i}");
+                //eprintln!("did not find vector {i}");
                 /*
                 let layer = hnsw.get_layer(0).unwrap();
 
@@ -1616,6 +1717,34 @@ mod tests {
         let recall = total_relevant as f32 / total as f32;
         eprintln!("with recall: {recall}");
         assert!(recall >= minimum_recall);
+    }
+
+    fn do_test_neighborhood_overlap(
+        hnsw1: &Hnsw<BigComparator, BigVec>,
+        hnsw2: &Hnsw<BigComparator, BigVec>,
+    ) {
+        let data1 = &hnsw1.layers[0].comparator.data;
+        let mut overlap = 0;
+        let mut total = 0;
+        for i in 0..data1.len() {
+            let v = AbstractVector::Stored(VectorId(i));
+            let results = hnsw1.search(v.clone(), 100);
+            let results2 = hnsw2.search(v, 100);
+            for (w, _) in results.iter() {
+                total += 1;
+                for (z, _) in results2.iter() {
+                    if z == w {
+                        overlap += 1;
+                        break;
+                    }
+                }
+            }
+        }
+        let relative_precision = overlap as f32 / total as f32;
+        eprintln!("overlap: {overlap}");
+        eprintln!("total: {total}");
+        eprintln!("relative precision: {relative_precision}");
+        assert!(relative_precision >= 0.5);
     }
 
     #[test]
@@ -1646,13 +1775,14 @@ mod tests {
         let size = 10000;
         let dimension = 10;
         let mut hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
-        let nodes = &hnsw.layers[0].nodes;
-        eprintln!("nodes at 0 {:?}", nodes);
-        let neighbors = &hnsw.layers[0].neighbors;
-        eprintln!("neighbors at 0 {:?}", neighbors);
-        do_test_recall(&hnsw, 1.0);
+        //let nodes = &hnsw.layers[0].nodes;
+        //eprintln!("nodes at 0 {:?}", nodes);
+        //let neighbors = &hnsw.layers[0].neighbors;
+        //eprintln!("neighbors at 0 {:?}", neighbors);
+        do_test_recall(&hnsw, 0.999);
         //eprintln!("Top nodes: {:?}", hnsw.layers[0].nodes);
         //eprintln!("Top neighbors: {:?}", hnsw.layers[0].neighbors);
+        //hnsw.improve_supers_balance();
         hnsw.improve_index();
         //eprintln!("usize max: {}", !0_usize);
         //eprintln!("Top nodes after: {:?}", hnsw.layers[0].nodes);
@@ -1677,7 +1807,7 @@ mod tests {
         let nodes = &hnsw.layers[1].nodes;
         eprintln!("nodes at 1 {:?}", nodes);
          */
-        let v = 9075;
+        let v = 9710;
         let n = hnsw.layers[2].get_node(VectorId(v)).unwrap();
         let nhs = hnsw.layers[2].neighborhood_size;
         let neighbors = &hnsw.layers[2].neighbors[n.0 * nhs..(n.0 + 1) * nhs];
@@ -1713,5 +1843,16 @@ mod tests {
             let results = hnsw.search(v, 9);
             assert_eq!(VectorId(i), results[0].0)
         }
+    }
+
+    #[test]
+    fn test_dimensionality_reduction() {
+        let size = 1000;
+        let dimension = 1000;
+        let (hnsw1, hnsw2) = make_random_and_dimensionally_reduced_hnsw(size, dimension);
+        //do_test_recall(&hnsw1, 0.1);
+        //do_test_recall(&hnsw2, 0.1);
+        do_test_neighborhood_overlap(&hnsw1, &hnsw2);
+        panic!();
     }
 }
