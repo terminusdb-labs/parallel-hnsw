@@ -1,17 +1,23 @@
 use std::time::Instant;
 
 use parallel_hnsw::{make_random_hnsw, AbstractVector, BigComparator, BigVec, Hnsw, VectorId};
+use rayon::prelude::*;
 fn do_test_recall(hnsw: &Hnsw<BigComparator, BigVec>) -> f32 {
     let data = &hnsw.comparator().data;
     let total = data.len();
-    let mut total_relevant = 0;
-    for (i, datum) in data.iter().enumerate() {
-        let v = AbstractVector::Unstored(datum);
-        let results = hnsw.search(v, 300);
-        if VectorId(i) == results[0].0 {
-            total_relevant += 1;
-        }
-    }
+    let total_relevant: usize = data
+        .par_iter()
+        .enumerate()
+        .map(|(i, datum)| {
+            let v = AbstractVector::Unstored(datum);
+            let results = hnsw.search(v, 300);
+            if VectorId(i) == results[0].0 {
+                1
+            } else {
+                0
+            }
+        })
+        .sum();
     total_relevant as f32 / total as f32
 }
 
