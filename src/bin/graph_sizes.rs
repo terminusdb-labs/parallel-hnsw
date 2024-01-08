@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use parallel_hnsw::{make_random_hnsw, AbstractVector, BigComparator, BigVec, Hnsw, VectorId};
 use rayon::prelude::*;
-fn do_test_recall(hnsw: &Hnsw<BigComparator, BigVec>) -> f32 {
+fn do_test_recall(hnsw: &Hnsw<BigComparator, BigVec>) -> usize {
     let data = &hnsw.comparator().data;
     let total = data.len();
     let total_relevant: usize = data
@@ -18,7 +18,7 @@ fn do_test_recall(hnsw: &Hnsw<BigComparator, BigVec>) -> f32 {
             }
         })
         .sum();
-    total_relevant as f32 / total as f32
+    total_relevant
 }
 
 pub fn main() {
@@ -31,11 +31,11 @@ pub fn main() {
             let hnsw = make_random_hnsw(*input_size, vector_size);
             let hnsw_elapsed = start.elapsed();
             let start = Instant::now();
-            let recall = do_test_recall(&hnsw);
+            let total_relevant = do_test_recall(&hnsw);
             let recall_elapsed = start.elapsed();
 
             println!(
-                "{vector_size},{input_size},{recall},{},{}",
+                "{vector_size},{input_size},{total_relevant},{},{}",
                 hnsw_elapsed.as_millis(),
                 recall_elapsed.as_millis()
             );
