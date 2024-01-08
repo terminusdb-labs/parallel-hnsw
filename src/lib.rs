@@ -80,7 +80,7 @@ pub trait Comparator<T>: Sync + Clone {
 }
 
 #[derive(PartialEq, PartialOrd, Clone, Copy, Debug)]
-pub struct OrderedFloat(f32);
+pub struct OrderedFloat(pub f32);
 
 impl Eq for OrderedFloat {}
 
@@ -93,10 +93,10 @@ impl Ord for OrderedFloat {
 
 #[derive(PartialEq, PartialOrd, Debug)]
 pub struct Layer<C: Comparator<T>, T> {
-    pub(crate) comparator: C,
-    neighborhood_size: usize,
-    nodes: Vec<VectorId>,
-    neighbors: Vec<NodeId>,
+    pub comparator: C,
+    pub neighborhood_size: usize,
+    pub nodes: Vec<VectorId>,
+    pub neighbors: Vec<NodeId>,
     _phantom: PhantomData<T>,
 }
 
@@ -112,11 +112,11 @@ type NodeDistances = Vec<(NodeId, f32)>;
 
 impl<C: Comparator<T>, T> Layer<C, T> {
     #[allow(unused)]
-    fn get_node(&self, v: VectorId) -> Option<NodeId> {
+    pub fn get_node(&self, v: VectorId) -> Option<NodeId> {
         self.nodes.binary_search(&v).ok().map(NodeId)
     }
 
-    fn get_vector(&self, n: NodeId) -> VectorId {
+    pub fn get_vector(&self, n: NodeId) -> VectorId {
         if n.0 > self.nodes.len() {
             eprintln!("nodes: {:?}", self.nodes);
             eprintln!("neighborhood: {:?}", self.neighbors);
@@ -124,7 +124,7 @@ impl<C: Comparator<T>, T> Layer<C, T> {
         self.nodes[n.0]
     }
 
-    fn get_neighbors(&self, n: NodeId) -> &[NodeId] {
+    pub fn get_neighbors(&self, n: NodeId) -> &[NodeId] {
         &self.neighbors[(n.0 * self.neighborhood_size)..((n.0 + 1) * self.neighborhood_size)]
     }
 
@@ -371,7 +371,7 @@ impl<C: Comparator<T>, T: Sync> Default for HnswSearcher<C, T> {
 
 #[derive(PartialEq, PartialOrd, Debug)]
 pub struct Hnsw<C: Comparator<T>, T: Sync> {
-    layers: Vec<Layer<C, T>>,
+    pub layers: Vec<Layer<C, T>>,
     immutable: HnswSearcher<C, T>,
 }
 
@@ -1058,7 +1058,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
     pub fn improve_index(&mut self) {
         for layer_id in 0..self.layer_count() - 1 {
             let vecs = self.discover_vectors_to_promote(layer_id);
-            eprintln!("Vectors to promote: {vecs:?}");
+            //eprintln!("Vectors to promote: {vecs:?}");
             self.extend_layer(layer_id + 1, vecs)
         }
     }
