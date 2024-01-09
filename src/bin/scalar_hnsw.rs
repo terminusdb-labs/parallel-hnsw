@@ -10,6 +10,15 @@ struct ScalarComparator {
     data: Vec<f32>,
 }
 
+impl ScalarComparator {
+    fn value_for(&self, vec: AbstractVector<f32>) -> f32 {
+        match vec {
+            AbstractVector::Stored(i) => self.data[i.0],
+            AbstractVector::Unstored(v) => *v,
+        }
+    }
+}
+
 impl Comparator<f32> for ScalarComparator {
     type Params = ();
 
@@ -18,24 +27,7 @@ impl Comparator<f32> for ScalarComparator {
         v1: parallel_hnsw::AbstractVector<f32>,
         v2: parallel_hnsw::AbstractVector<f32>,
     ) -> f32 {
-        match (v1, v2) {
-            (
-                parallel_hnsw::AbstractVector::Stored(i1),
-                parallel_hnsw::AbstractVector::Stored(i2),
-            ) => (self.data[i1.0] - self.data[i2.0]).abs(),
-            (
-                parallel_hnsw::AbstractVector::Stored(i),
-                parallel_hnsw::AbstractVector::Unstored(v),
-            )
-            | (
-                parallel_hnsw::AbstractVector::Unstored(v),
-                parallel_hnsw::AbstractVector::Stored(i),
-            ) => (v - self.data[i.0]).abs(),
-            (
-                parallel_hnsw::AbstractVector::Unstored(v1),
-                parallel_hnsw::AbstractVector::Unstored(v2),
-            ) => (v1 - v2).abs(),
-        }
+        (self.value_for(v1) - self.value_for(v2)).abs()
     }
 
     fn serialize<P: AsRef<std::path::Path>>(
@@ -71,32 +63,67 @@ fn make_random_scalar_hnsw(count: usize) -> Hnsw<ScalarComparator, f32> {
     hnsw
 }
 
-fn do_test_recall(hnsw: &Hnsw<ScalarComparator, f32>) -> usize {
+fn do_test_recall(hnsw: &Hnsw<ScalarComparator, f32>) -> Vec<usize> {
     let data = &hnsw.comparator().data;
     let total = data.len();
-    let total_relevant: usize = data
+    let unrecallable_vecs: Vec<_> = data
         .par_iter()
         .enumerate()
-        .map(|(i, datum)| {
+        .filter_map(|(i, datum)| {
             let v = AbstractVector::Unstored(datum);
-            let results = hnsw.search(v, 300);
+            let results = hnsw.search(v, 300, 1);
             if VectorId(i) == results[0].0 {
-                1
+                None
             } else {
-                0
+                Some(i)
             }
         })
-        .sum();
-    total_relevant
+        .collect();
+
+    unrecallable_vecs
 }
 
 pub fn main() {
-    let mut hnsw = make_random_scalar_hnsw(100000);
-    let total_relevant = do_test_recall(&hnsw);
-    eprintln!("{total_relevant} of {}", hnsw.comparator().data.len());
-    hnsw.improve_index();
-    let total_relevant = do_test_recall(&hnsw);
-    eprintln!("{total_relevant} of {}", hnsw.comparator().data.len());
+    let mut hnsw = make_random_scalar_hnsw(1000000);
+    let unrecallable_vecs = do_test_recall(&hnsw);
+    assert_ne!(0, unrecallable_vecs.len());
+    /*
+    let unrecallable_vec = unrecallable_vecs[0];
+    let unrecallable_val = hnsw.comparator().data[unrecallable_vec];
+    eprintln!("unrecallable value: {unrecallable_val} ({unrecallable_vec})");
+    eprintln!("layer count: {}", hnsw.layer_count());
+    dbg!(hnsw.search_noisy(AbstractVector::Unstored(&unrecallable_val), 300));
+    let bottom_layer = hnsw.get_layer(0).unwrap();
+    let bottom_node = bottom_layer.get_node(VectorId(unrecallable_vec)).unwrap();
+    let reverse_neighbors = bottom_layer.reverse_get_neighbors(bottom_node);
+    eprintln!("should have been reachable from {:?}", reverse_neighbors);
+    let mut reverse_neighbor_values: Vec<_> = reverse_neighbors
+        .iter()
+        .map(|n| bottom_layer.get_vector(*n))
+        .map(|v| {
+            (
+                v,
+                bottom_layer.comparator.compare_vec(
+                    AbstractVector::Stored(v),
+                    AbstractVector::Unstored(&unrecallable_val),
+                ),
+            )
+        })
+        .collect();
+    reverse_neighbor_values.sort_by_key(|(_, d)| OrderedFloat(*d));
+    eprintln!(
+        "should have been reachable from {:?}",
+        reverse_neighbor_values
+    );
+    */
+
+    /*
+    for i in 0..hnsw.layer_count() {
+        eprintln!("checking layer {i}");
+        hnsw.discover_vectors_to_promote(i);
+    }
+    */
+
     /*
     eprintln!("data: {:?}", hnsw.comparator().data);
     for i in 0..hnsw.layer_count() {

@@ -16,6 +16,7 @@ use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 use rand_distr::{Distribution, Exp, Uniform};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::fmt::Debug;
 use std::io::{Read, Write};
 
 use crate::priority_queue::{EmptyValue, PriorityQueue};
@@ -50,6 +51,18 @@ mod priority_queue;
 pub enum AbstractVector<'a, T> {
     Stored(VectorId),
     Unstored(&'a T),
+}
+
+impl<'a, T> Debug for AbstractVector<'a, T>
+where
+    T: Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stored(arg0) => f.debug_tuple("Stored").field(arg0).finish(),
+            Self::Unstored(arg0) => f.debug_tuple("Unstored").field(arg0).finish(),
+        }
+    }
 }
 
 impl<'a, T> Clone for AbstractVector<'a, T> {
@@ -128,25 +141,35 @@ impl<C: Comparator<T>, T> Layer<C, T> {
         &self.neighbors[(n.0 * self.neighborhood_size)..((n.0 + 1) * self.neighborhood_size)]
     }
 
-    pub fn nearest_neighbors(&self, n: NodeId, number_of_nodes: usize) -> Vec<(NodeId, f32)> {
+    pub fn nearest_neighbors(
+        &self,
+        n: NodeId,
+        number_of_nodes: usize,
+        probe_depth: usize,
+    ) -> Vec<(NodeId, f32)> {
         let v = self.get_vector(n);
         let mut candidates = PriorityQueue::new(number_of_nodes);
         candidates.insert(n, f32::MAX);
-        self.closest_nodes(AbstractVector::Stored(v), &mut candidates);
+        self.closest_nodes(AbstractVector::Stored(v), &mut candidates, probe_depth);
         candidates.iter().collect()
     }
 
-    pub fn closest_nodes(&self, v: AbstractVector<T>, candidates: &mut PriorityQueue<NodeId>) {
+    pub fn closest_nodes(
+        &self,
+        v: AbstractVector<T>,
+        candidates: &mut PriorityQueue<NodeId>,
+        mut probe_depth: usize,
+    ) {
         assert!(!candidates.is_empty());
         let mut visit_queue: Vec<(NodeId, f32)> = candidates.iter().collect();
         visit_queue.reverse();
-        let mut visited: HashSet<NodeId> = HashSet::new();
+        let mut visited: HashSet<NodeId> = candidates.iter().map(|(n, _)| n).collect();
         //eprintln!("------------------------------------");
         //eprintln!("Initial visit queue: {visit_queue:?}");
         while let Some((next, _)) = visit_queue.pop() {
             //eprintln!("...");
             //eprintln!("working with next: {next:?}");
-            visited.insert(next);
+            //visited.insert(next);
             let neighbors = self.get_neighbors(next);
             let mut neighbor_distances: Vec<_> = neighbors
                 .iter() // Remove empty cells and previously visited nodes
@@ -164,11 +187,7 @@ impl<C: Comparator<T>, T> Layer<C, T> {
             visited.extend(neighbor_distances.iter().map(|(n, _)| n));
 
             let worst = candidates.last();
-            visit_queue.extend(
-                neighbor_distances
-                    .iter()
-                    .filter(|(_, d)| worst.is_none() || worst.as_ref().unwrap().1 > *d),
-            );
+            visit_queue.extend(neighbor_distances.iter());
             //eprintln!("before");
             //dbg!(&candidates.data);
             //dbg!(&candidates.priorities);
@@ -177,7 +196,10 @@ impl<C: Comparator<T>, T> Layer<C, T> {
             //eprintln!("after");
 
             if !did_something {
-                break;
+                probe_depth -= 1;
+                if probe_depth == 0 {
+                    break;
+                }
             }
             //dbg!(&candidates.data);
             //dbg!(&candidates.priorities);
@@ -192,6 +214,7 @@ impl<C: Comparator<T>, T> Layer<C, T> {
         v: AbstractVector<T>,
         candidates: &PriorityQueue<VectorId>,
         candidate_count: usize,
+        probe_depth: usize,
     ) -> Vec<(VectorId, f32)> {
         let pairs: Vec<(NodeId, f32)> = candidates
             .iter()
@@ -201,7 +224,7 @@ impl<C: Comparator<T>, T> Layer<C, T> {
         //eprintln!("pairs: {pairs:?}");
         let mut queue = PriorityQueue::new(candidate_count);
         queue.merge_pairs(&pairs);
-        self.closest_nodes(v, &mut queue);
+        self.closest_nodes(v, &mut queue, probe_depth);
         queue
             .iter()
             .map(|(node_id, distance)| (self.get_vector(node_id), distance))
@@ -330,6 +353,17 @@ impl<C: Comparator<T>, T> Layer<C, T> {
             .take(total)
             .collect()
     }
+
+    pub fn reverse_get_neighbors(&self, node: NodeId) -> Vec<NodeId> {
+        let mut result = Vec::new();
+        for n in 0..self.node_count() {
+            if self.get_neighbors(NodeId(n)).contains(&node) {
+                result.push(NodeId(n));
+            }
+        }
+
+        result
+    }
 }
 
 struct AtomicNodeDistance {
@@ -439,7 +473,7 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
         number_of_nodes: usize,
         layers: &[L],
     ) -> Vec<(VectorId, f32)> {
-        self.search_layers(AbstractVector::Stored(v), number_of_nodes, layers)
+        self.search_layers(AbstractVector::Stored(v), number_of_nodes, layers, 1)
             .into_iter()
             .filter(|(w, _)| v != *w)
             .collect::<Vec<_>>()
@@ -450,6 +484,18 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
         v: AbstractVector<T>,
         number_of_candidates: usize,
         layers: &[L],
+        probe_depth: usize,
+    ) -> Vec<(VectorId, f32)> {
+        self.search_layers_noisy(v, number_of_candidates, layers, probe_depth, false)
+    }
+
+    pub fn search_layers_noisy<L: AsRef<Layer<C, T>>>(
+        &self,
+        v: AbstractVector<T>,
+        number_of_candidates: usize,
+        layers: &[L],
+        probe_depth: usize,
+        noisy: bool,
     ) -> Vec<(VectorId, f32)> {
         let upper_layer_candidate_count = 1;
         let entry_vector = self.entry_vector();
@@ -461,19 +507,36 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
                     .compare_vec(v.clone(), AbstractVector::Stored(entry_vector))
             })
             .unwrap_or(0.0);
+        if noisy {
+            eprintln!("layer len: {}", layers.len());
+            eprintln!("distance from entry: {distance_from_entry}");
+        }
         let mut candidates = PriorityQueue::new(number_of_candidates);
         candidates.insert(entry_vector, distance_from_entry);
         for i in 0..layers.len() {
+            candidates
+                .iter()
+                .fold(f32::MIN, |last, (nodeid, distance)| {
+                    if distance < last {
+                        panic!("oh yikes {nodeid:?} {distance}");
+                    }
+                    distance
+                });
             let candidate_count = if layers.len() == 1 || i == layers.len() - 1 {
                 number_of_candidates
             } else {
                 upper_layer_candidate_count
             };
             let layer = &layers[i];
-            let closest = layer
-                .as_ref()
-                .closest_vectors(v.clone(), &candidates, candidate_count);
-            //eprintln!("closest: {closest:?}");
+            let closest = layer.as_ref().closest_vectors(
+                v.clone(),
+                &candidates,
+                candidate_count,
+                probe_depth,
+            );
+            if noisy {
+                eprintln!("closest: {closest:?}");
+            }
             candidates.merge_pairs(&closest);
         }
 
@@ -533,9 +596,20 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         &self,
         v: AbstractVector<T>,
         number_of_candidates: usize,
+        probe_depth: usize,
     ) -> Vec<(VectorId, f32)> {
         self.immutable
-            .search_layers(v, number_of_candidates, &self.layers)
+            .search_layers(v, number_of_candidates, &self.layers, probe_depth)
+    }
+
+    pub fn search_noisy(
+        &self,
+        v: AbstractVector<T>,
+        number_of_candidates: usize,
+        probe_depth: usize,
+    ) -> Vec<(VectorId, f32)> {
+        self.immutable
+            .search_layers_noisy(v, number_of_candidates, &self.layers, probe_depth, true)
     }
 
     pub fn generate_layer(
@@ -974,6 +1048,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                     AbstractVector::Stored(*v),
                     10 * layer.neighborhood_size,
                     &pseudo_layers,
+                    1,
                 );
                 let cross_results = cross_compare.get(v).unwrap();
 
