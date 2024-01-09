@@ -119,7 +119,7 @@ impl<'a, Id: PartialOrd + PartialEq + Copy + EmptyValue> PriorityQueue<'a, Id> {
                         }
                     }
                     last_idx = self.insert_at(start_idx, other_data[other_idx], *other_distance);
-                    did_something = last_idx != self.data.len();
+                    did_something |= last_idx != self.data.len();
                 }
                 Err(i) => {
                     if i >= self.data.len() {
