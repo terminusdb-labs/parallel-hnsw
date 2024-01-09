@@ -235,7 +235,7 @@ impl<C: Comparator<T>, T> Layer<C, T> {
         self.nodes.len()
     }
 
-    fn node_distances(&self, supers: &[VectorId]) -> Vec<NodeDistance> {
+    pub fn node_distances(&self, supers: &[VectorId]) -> Vec<NodeDistance> {
         let mut visit_queue = Vec::with_capacity(supers.len());
         visit_queue.extend(supers.iter().map(|s| self.get_node(*s).unwrap()));
 
