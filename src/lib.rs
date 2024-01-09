@@ -1136,6 +1136,14 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             //eprintln!("Vectors to promote: {vecs:?}");
             self.extend_layer(layer_id + 1, vecs)
         }
+
+        // final step: maybe we need a new top layer
+        let mut vecs = self.discover_vectors_to_promote(self.layer_count() - 1);
+        vecs.sort();
+        assert!(vecs.len() < 24);
+        let new_layer = self.generate_layer(self.comparator().clone(), vecs, 24);
+        self.layers.insert(0, new_layer);
+        // probably gotta write it away too
     }
 }
 
@@ -1659,6 +1667,7 @@ mod tests {
         let size = 10000;
         let dimension = 10;
         let mut hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
+        //hnsw.improve_index();
         let nodes = &hnsw.layers[0].nodes;
         eprintln!("nodes at 0 {:?}", nodes);
         let neighbors = &hnsw.layers[0].neighbors;
@@ -1690,12 +1699,6 @@ mod tests {
         let nodes = &hnsw.layers[1].nodes;
         eprintln!("nodes at 1 {:?}", nodes);
          */
-        let v = 9075;
-        let n = hnsw.layers[2].get_node(VectorId(v)).unwrap();
-        let nhs = hnsw.layers[2].neighborhood_size;
-        let neighbors = &hnsw.layers[2].neighbors[n.0 * nhs..(n.0 + 1) * nhs];
-        eprintln!("neighbors for {v} after: {:?}", neighbors);
-
         do_test_recall(&hnsw, 1.0);
     }
 
