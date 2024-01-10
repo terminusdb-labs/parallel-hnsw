@@ -407,4 +407,19 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn merge_did_something() {
+        // check to see that "did something" is correct when skipping at the end
+        let mut data = vec![NodeId(0), NodeId(3), NodeId(4)];
+        let mut priorities = vec![0.0, 1.2, 1.2];
+        let mut priority_queue = PriorityQueue::from_slices(&mut data, &mut priorities);
+
+        let pairs = vec![(NodeId(1), 0.1), (NodeId(5), 1.2)];
+
+        let result = priority_queue.merge_pairs(&pairs);
+        assert!(result);
+        assert_eq!(data, vec![NodeId(0), NodeId(1), NodeId(3)]);
+        assert_eq!(priorities, vec![0.0, 0.1, 1.2]);
+    }
 }
