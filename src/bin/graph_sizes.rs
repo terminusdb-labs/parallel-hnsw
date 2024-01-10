@@ -10,7 +10,7 @@ fn do_test_recall(hnsw: &Hnsw<BigComparator, BigVec>) -> usize {
         .enumerate()
         .map(|(i, datum)| {
             let v = AbstractVector::Unstored(datum);
-            let results = hnsw.search(v, 300, 1);
+            let results = hnsw.search(v, 300, 1, 1);
             if VectorId(i) == results[0].0 {
                 1
             } else {

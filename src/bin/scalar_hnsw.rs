@@ -65,13 +65,12 @@ fn make_random_scalar_hnsw(count: usize) -> Hnsw<ScalarComparator, f32> {
 
 fn do_test_recall(hnsw: &Hnsw<ScalarComparator, f32>) -> Vec<usize> {
     let data = &hnsw.comparator().data;
-    let total = data.len();
     let unrecallable_vecs: Vec<_> = data
         .par_iter()
         .enumerate()
         .filter_map(|(i, datum)| {
             let v = AbstractVector::Unstored(datum);
-            let results = hnsw.search(v, 300, 1);
+            let results = hnsw.search(v, 300, 1, 1);
             if VectorId(i) == results[0].0 {
                 None
             } else {
