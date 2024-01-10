@@ -76,6 +76,10 @@ pub fn main() {
         let candidates = candidates_optimizer.ask(&mut rng).unwrap();
         let supers = supers_optimizer.ask(&mut rng).unwrap();
         let probe_depth = probe_optimizer.ask(&mut rng).unwrap();
+        eprintln!("trying neigborhood: {}", neighborhood as usize);
+        eprintln!("trying candidates: {}", candidates as usize);
+        eprintln!("trying supers: {}", supers as usize);
+        eprintln!("trying probe_depth: {}", probe_depth as usize);
         let hnsw = make_random_hnsw(input_size, vector_size, neighborhood as usize);
         let total_relevant = do_test_recall(
             &hnsw,
@@ -84,6 +88,7 @@ pub fn main() {
             supers as usize,
         );
         let recall = total_relevant as f64 / input_size as f64;
+        eprintln!("Obtained recall of: {recall}");
         let one_minus_recall = 1.0 - recall;
         neighborhood_optimizer
             .tell(neighborhood, one_minus_recall)
