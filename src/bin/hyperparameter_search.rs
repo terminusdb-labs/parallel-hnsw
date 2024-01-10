@@ -46,12 +46,12 @@ fn do_test_recall(
 }
 
 pub fn main() {
-    let vector_size = 1000;
-    let input_size = 10000;
-    let neighborhood_vec: Vec<usize> = (10..30).map(|n| n * 2).collect();
-    let candidates_vec: Vec<usize> = (1..10).map(|n| n * 100).collect();
+    let vector_size = 1536;
+    let input_size = 100_000;
+    let neighborhood_vec: Vec<usize> = (50..80).collect();
+    let candidates_vec: Vec<usize> = (8..20).map(|n| n * 100).collect();
     let probe_depth_vec: Vec<usize> = (1..5).collect();
-    let supers_vec: Vec<usize> = (1..10).collect();
+    let supers_vec: Vec<usize> = (3..8).collect();
     let mut neighborhood_optimizer = tpe::TpeOptimizer::new(
         tpe::histogram_estimator(),
         tpe::categorical_range(neighborhood_vec.len()).unwrap(),
