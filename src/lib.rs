@@ -473,7 +473,7 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
         number_of_nodes: usize,
         layers: &[L],
     ) -> Vec<(VectorId, f32)> {
-        self.search_layers(AbstractVector::Stored(v), number_of_nodes, layers, 1)
+        self.search_layers(AbstractVector::Stored(v), number_of_nodes, layers, 1, 1)
             .into_iter()
             .filter(|(w, _)| v != *w)
             .collect::<Vec<_>>()
@@ -485,8 +485,16 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
         number_of_candidates: usize,
         layers: &[L],
         probe_depth: usize,
+        upper_layer_candidate_count: usize,
     ) -> Vec<(VectorId, f32)> {
-        self.search_layers_noisy(v, number_of_candidates, layers, probe_depth, false)
+        self.search_layers_noisy(
+            v,
+            number_of_candidates,
+            layers,
+            probe_depth,
+            upper_layer_candidate_count,
+            false,
+        )
     }
 
     pub fn search_layers_noisy<L: AsRef<Layer<C, T>>>(
@@ -495,9 +503,9 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
         number_of_candidates: usize,
         layers: &[L],
         probe_depth: usize,
+        upper_layer_candidate_count: usize,
         noisy: bool,
     ) -> Vec<(VectorId, f32)> {
-        let upper_layer_candidate_count = 1;
         let entry_vector = self.entry_vector();
         let distance_from_entry = layers
             .first()
@@ -597,9 +605,15 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         v: AbstractVector<T>,
         number_of_candidates: usize,
         probe_depth: usize,
+        upper_layer_candidate_count: usize,
     ) -> Vec<(VectorId, f32)> {
-        self.immutable
-            .search_layers(v, number_of_candidates, &self.layers, probe_depth)
+        self.immutable.search_layers(
+            v,
+            number_of_candidates,
+            &self.layers,
+            probe_depth,
+            upper_layer_candidate_count,
+        )
     }
 
     pub fn search_noisy(
@@ -607,9 +621,16 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         v: AbstractVector<T>,
         number_of_candidates: usize,
         probe_depth: usize,
+        upper_layer_candidate_count: usize,
     ) -> Vec<(VectorId, f32)> {
-        self.immutable
-            .search_layers_noisy(v, number_of_candidates, &self.layers, probe_depth, true)
+        self.immutable.search_layers_noisy(
+            v,
+            number_of_candidates,
+            &self.layers,
+            probe_depth,
+            upper_layer_candidate_count,
+            true,
+        )
     }
 
     pub fn generate_layer(
@@ -1049,6 +1070,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                     10 * layer.neighborhood_size,
                     &pseudo_layers,
                     1,
+                    1,
                 );
                 let cross_results = cross_compare.get(v).unwrap();
 
@@ -1479,7 +1501,7 @@ mod tests {
         let sqrt2_recip = std::f32::consts::FRAC_1_SQRT_2;
         let slice = &[0.0, sqrt2_recip, sqrt2_recip];
         let search_vector = AbstractVector::Unstored(slice);
-        let results = hnsw.search(search_vector, 9, 1);
+        let results = hnsw.search(search_vector, 9, 1, 1);
         assert_eq!(
             results,
             vec![
@@ -1586,7 +1608,7 @@ mod tests {
         let data = &hnsw.layers[0].comparator.data;
         for (i, datum) in data.iter().enumerate() {
             let v = AbstractVector::Unstored(datum);
-            let results = hnsw.search(v, 9, 1);
+            let results = hnsw.search(v, 9, 1, 1);
             eprintln!("results: {results:?}");
             assert_eq!(VectorId(i), results[0].0)
         }
@@ -1601,7 +1623,7 @@ mod tests {
             eprintln!("Searching for {i}");
             */
             let v = AbstractVector::Unstored(datum);
-            let results = hnsw.search(v, 300, 1);
+            let results = hnsw.search(v, 300, 1, 1);
             if VectorId(i) == results[0].0 {
                 total_relevant += 1;
             } else {
@@ -1711,7 +1733,7 @@ mod tests {
         let data = &hnsw.layers[hnsw.layer_count() - 1].comparator.data;
         for (i, datum) in data.iter().enumerate() {
             let v = AbstractVector::Unstored(datum);
-            let results = hnsw.search(v, 9, 1);
+            let results = hnsw.search(v, 9, 1, 1);
             assert_eq!(VectorId(i), results[0].0)
         }
     }
@@ -1723,7 +1745,7 @@ mod tests {
         let data = &hnsw.layers[hnsw.layer_count() - 1].comparator.data;
         for (i, datum) in data.iter().enumerate() {
             let v = AbstractVector::Unstored(datum);
-            let results = hnsw.search(v, 9, 1);
+            let results = hnsw.search(v, 9, 1, 1);
             assert_eq!(VectorId(i), results[0].0)
         }
     }
