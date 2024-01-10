@@ -1401,7 +1401,7 @@ impl Comparator<BigVec> for BigComparator {
     }
 }
 
-fn random_normed_vec(prng: &mut StdRng, size: usize) -> Vec<f32> {
+pub fn random_normed_vec(prng: &mut StdRng, size: usize) -> Vec<f32> {
     let range = Uniform::from(0.0..1.0);
     let vec: Vec<f32> = prng.sample_iter(&range).take(size).collect();
     let norm = vec.iter().map(|f| f * f).sum::<f32>().sqrt();
