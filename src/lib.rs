@@ -1342,9 +1342,9 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 let vector = pseudo_layer.get_vector(local_node);
                 let matches = self.immutable.search_layers(
                     AbstractVector::Stored(vector),
-                    100,
+                    300,
                     &pseudo_stack,
-                    2,
+                    1,
                 );
                 for (neighbor_vec, distance) in matches.into_iter().take(10) {
                     if neighbor_vec == vector {
@@ -1877,7 +1877,7 @@ mod tests {
                 eprintln!("Searching for {i}");
                 */
                 let v = AbstractVector::Unstored(datum);
-                let results = hnsw.search(v, 300, 1);
+                let results = hnsw.search(v, 300, 2);
                 if VectorId(i) == results[0].0 {
                     1
                 } else {
@@ -1934,7 +1934,7 @@ mod tests {
         let mut improvement_count = 0;
         let mut last_recall = 0.0;
         let mut last_improvement = 1.0;
-        while last_improvement > 0.01 {
+        while last_improvement > 0.001 {
             eprintln!("{improvement_count} time to improve neighborhoods");
             hnsw.improve_neighborhoods();
             let new_recall = do_test_recall(&hnsw, 0.0);
