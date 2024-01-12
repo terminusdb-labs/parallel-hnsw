@@ -1853,7 +1853,7 @@ mod tests {
         }
     }
 
-    fn do_test_recall(hnsw: &Hnsw<BigComparator, BigVec>, minimum_recall: f32) {
+    fn do_test_recall(hnsw: &Hnsw<BigComparator, BigVec>, minimum_recall: f32) -> f32 {
         let data = &hnsw.layers[0].comparator.data;
         let total = data.len();
         let total_relevant: usize = data
@@ -1877,6 +1877,8 @@ mod tests {
         let recall = total_relevant as f32 / total as f32;
         eprintln!("with recall: {recall}");
         assert!(recall >= minimum_recall);
+
+        recall
     }
 
     #[test]
@@ -1904,13 +1906,18 @@ mod tests {
 
     #[test]
     fn test_recall() {
-        let size = 10_000;
-        let dimension = 100;
+        let size = 100_000;
+        let dimension = 1536;
         let mut hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
         do_test_recall(&hnsw, 0.0);
-        eprintln!("time to improve neighborhoods");
-        hnsw.improve_neighborhoods();
-        do_test_recall(&hnsw, 0.0);
+        let mut improvement_count = 0;
+        let mut last_improvement = 1.0;
+        while last_improvement > 0.01 {
+            eprintln!("{improvement_count} time to improve neighborhoods");
+            hnsw.improve_neighborhoods();
+            last_improvement = do_test_recall(&hnsw, 0.0);
+            improvement_count += 1;
+        }
         eprintln!("time to promote nodes");
         hnsw.improve_index();
         do_test_recall(&hnsw, 1.0);
