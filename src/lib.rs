@@ -2021,6 +2021,7 @@ mod tests {
             last_recall = new_recall;
             eprintln!("improved index by {last_improvement}");
             improvement_count += 1;
+            eprintln!("=========");
         }
         panic!();
     }
