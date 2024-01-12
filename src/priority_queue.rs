@@ -40,6 +40,15 @@ impl<'a, Id: PartialOrd + PartialEq + Copy + EmptyValue> PriorityQueue<'a, Id> {
         self.data.len() == 0 || self.data[0].is_empty()
     }
 
+    pub fn first(&'a self) -> Option<(Id, f32)> {
+        let length = self.len();
+        if length == 0 {
+            None
+        } else {
+            Some((self.data[0], self.priorities[0]))
+        }
+    }
+
     pub fn last(&'a self) -> Option<(Id, f32)> {
         let length = self.len();
         if length == 0 {
