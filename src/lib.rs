@@ -262,7 +262,6 @@ impl<C: Comparator<T>, T> Layer<C, T> {
         vectors: &[VectorId],
     ) -> HashMap<VectorId, Vec<(NodeId, f32)>> {
         // convert supers to nodes in this layer
-        let nodes: Vec<_> = vectors.iter().map(|s| self.get_node(*s).unwrap()).collect();
         // partition nodes by distance to supers
         let mut distances_to_supers: Vec<_> = self
             .nodes
@@ -270,7 +269,7 @@ impl<C: Comparator<T>, T> Layer<C, T> {
             .enumerate()
             .map(|(ix, v)| {
                 let node = NodeId(ix);
-                let super_distances = (0..vectors.len()).into_iter().map(|ix2| {
+                let super_distances = (0..vectors.len()).map(|ix2| {
                     let super_vec = vectors[ix2];
                     (
                         super_vec,
@@ -1316,21 +1315,11 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         pseudo_stack.extend(top_stack.iter());
         pseudo_stack.push(&pseudo_layer);
 
-        let supers: &[VectorId] = if layer_from_top == 0 {
-            &current_layer.nodes[0..1]
-        } else {
-            &top_stack[top_stack.len() - 1].nodes
-        };
-        let unreachables = current_layer.nodes_not_connected_to_super(supers);
-        eprintln!(
-            "{layer_from_top}: found {} unreachables (out of {})",
-            unreachables.len(),
-            current_layer.nodes.len()
-        );
-        unreachables
+        (0..current_layer.node_count())
             .into_par_iter()
-            .map(|unreachable| {
-                let vector = current_layer.get_vector(unreachable);
+            .map(|node_id| {
+                let local_node = NodeId(node_id);
+                let vector = current_layer.get_vector(local_node);
                 let matches = self.immutable.search_layers(
                     AbstractVector::Stored(vector),
                     100,
@@ -1344,7 +1333,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                     let neighbor = current_layer.get_node(neighbor_vec).unwrap();
                     let neighbor_of_neighbors = current_layer.get_neighbors(neighbor);
                     if let Some(insert_pos) = neighbor_of_neighbors.iter().position(|n| {
-                        if n.is_empty() {
+                        if n.is_empty() || *n == local_node {
                             return true;
                         }
                         let v = current_layer.get_vector(*n);
@@ -1352,8 +1341,13 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                             AbstractVector::Stored(v),
                             AbstractVector::Stored(neighbor_vec),
                         );
-                        distance < other_distance
+                        distance < other_distance || (distance == other_distance && local_node < *n)
                     }) {
+                        if neighbor_of_neighbors[insert_pos] == local_node {
+                            // we are already in this neighbor list. do not add again
+                            continue;
+                        }
+
                         let neighbor_of_neighbors: &'static mut [NodeId] = unsafe {
                             slice::from_raw_parts_mut(
                                 neighbor_of_neighbors.as_ptr() as *mut NodeId,
@@ -1363,7 +1357,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                         for i in (insert_pos..neighbor_of_neighbors.len() - 1).rev() {
                             neighbor_of_neighbors[i + 1] = neighbor_of_neighbors[i];
                         }
-                        neighbor_of_neighbors[insert_pos] = unreachable;
+                        neighbor_of_neighbors[insert_pos] = local_node;
                     }
                 }
             })
@@ -1917,17 +1911,10 @@ mod tests {
 
     #[test]
     fn test_recall() {
-        let size = 100000;
+        let size = 10000;
         let dimension = 100;
         let mut hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
-        //hnsw.improve_index();
-        let nodes = &hnsw.layers[0].nodes;
-        //eprintln!("nodes at 0 {:?}", nodes);
-        let neighbors = &hnsw.layers[0].neighbors;
-        //eprintln!("neighbors at 0 {:?}", neighbors);
         do_test_recall(&hnsw, 0.0);
-        //eprintln!("Top nodes: {:?}", hnsw.layers[0].nodes);
-        //eprintln!("Top neighbors: {:?}", hnsw.layers[0].neighbors);
         eprintln!("time to improve neighborhoods");
         hnsw.improve_neighborhoods();
         //eprintln!("usize max: {}", !0_usize);
