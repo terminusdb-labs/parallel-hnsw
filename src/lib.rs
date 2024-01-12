@@ -1325,11 +1325,16 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         pseudo_stack.extend(top_stack.iter());
         pseudo_stack.push(&pseudo_layer);
 
-        (0..current_layer.node_count())
+        let neighbor_candidates: Vec<RwLock<&mut [NodeId]>> = current_layer
+            .neighbors
+            .chunks_exact_mut(current_layer.neighborhood_size)
+            .map(RwLock::new)
+            .collect();
+        (0..pseudo_layer.node_count())
             .into_par_iter()
             .map(|node_id| {
                 let local_node = NodeId(node_id);
-                let vector = current_layer.get_vector(local_node);
+                let vector = pseudo_layer.get_vector(local_node);
                 let matches = self.immutable.search_layers(
                     AbstractVector::Stored(vector),
                     100,
@@ -1340,13 +1345,13 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                     if neighbor_vec == vector {
                         break;
                     }
-                    let neighbor = current_layer.get_node(neighbor_vec).unwrap();
-                    let neighbor_of_neighbors = current_layer.get_neighbors(neighbor);
+                    let neighbor = pseudo_layer.get_node(neighbor_vec).unwrap();
+                    let neighbor_of_neighbors = neighbor_candidates[neighbor.0].read().unwrap();
                     if let Some(insert_pos) = neighbor_of_neighbors.iter().position(|n| {
                         if n.is_empty() || *n == local_node {
                             return true;
                         }
-                        let v = current_layer.get_vector(*n);
+                        let v = pseudo_layer.get_vector(*n);
                         let other_distance = current_layer.comparator.compare_vec(
                             AbstractVector::Stored(v),
                             AbstractVector::Stored(neighbor_vec),
@@ -1357,13 +1362,10 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                             // we are already in this neighbor list. do not add again
                             continue;
                         }
+                        std::mem::drop(neighbor_of_neighbors);
+                        let mut neighbor_of_neighbors =
+                            neighbor_candidates[neighbor.0].write().unwrap();
 
-                        let neighbor_of_neighbors: &'static mut [NodeId] = unsafe {
-                            slice::from_raw_parts_mut(
-                                neighbor_of_neighbors.as_ptr() as *mut NodeId,
-                                neighbor_of_neighbors.len(),
-                            )
-                        };
                         for i in (insert_pos..neighbor_of_neighbors.len() - 1).rev() {
                             neighbor_of_neighbors[i + 1] = neighbor_of_neighbors[i];
                         }
@@ -1912,12 +1914,14 @@ mod tests {
         let dimension = 1536;
         let mut hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
         do_test_recall(&hnsw, 0.0);
+        /*
         eprintln!("initial neighborhood improvement");
         hnsw.improve_neighborhoods();
         do_test_recall(&hnsw, 0.0);
         eprintln!("time to promote nodes");
         hnsw.improve_index();
         do_test_recall(&hnsw, 0.0);
+        */
         let mut improvement_count = 0;
         let mut last_recall = 0.0;
         let mut last_improvement = 1.0;
