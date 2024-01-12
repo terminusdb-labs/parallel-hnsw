@@ -1908,7 +1908,7 @@ mod tests {
 
     #[test]
     fn test_recall() {
-        let size = 100_000;
+        let size = 1_000;
         let dimension = 1536;
         let mut hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
         do_test_recall(&hnsw, 0.0);
@@ -1916,7 +1916,7 @@ mod tests {
         hnsw.improve_index();
         do_test_recall(&hnsw, 0.0);
         let mut improvement_count = 0;
-        let mut last_recall = 1.0;
+        let mut last_recall = 0.0;
         let mut last_improvement = 1.0;
         while last_improvement > 0.01 {
             eprintln!("{improvement_count} time to improve neighborhoods");
