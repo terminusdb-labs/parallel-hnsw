@@ -1856,35 +1856,22 @@ mod tests {
     fn do_test_recall(hnsw: &Hnsw<BigComparator, BigVec>, minimum_recall: f32) {
         let data = &hnsw.layers[0].comparator.data;
         let total = data.len();
-        let mut total_relevant = 0;
-        for (i, datum) in data.iter().enumerate() {
-            /* eprintln!("XXXXXXXXXXXXXXXXXXXXXX");
-            eprintln!("Searching for {i}");
-            */
-            let v = AbstractVector::Unstored(datum);
-            let results = hnsw.search(v, 300, 1);
-            if VectorId(i) == results[0].0 {
-                total_relevant += 1;
-            } else {
-                //eprintln!("did not find vector {i}");
-                /*
-                let layer = hnsw.get_layer(0).unwrap();
-
-                let neighborhood = layer.get_neighbors(NodeId(i));
-                eprintln!(
-                    "Searching for vector: {i} with result: {:?} and result queue: {results:?} having neighborhood: {neighborhood:?}",
-                    results[0].0 .0
-                );
-                let neighborhood = layer.get_neighbors(NodeId(results[0].0 .0));
-                eprintln!(
-                    "And we have neighborhood {:?} as: {neighborhood:?}",
-                    results[0].0 .0
-                );
-                let neighborhood = layer.get_neighbors(NodeId(i));
-                eprintln!("And we have neighborhood {i} as: {neighborhood:?}");
+        let total_relevant: usize = data
+            .par_iter()
+            .enumerate()
+            .map(|(i, datum)| {
+                /* eprintln!("XXXXXXXXXXXXXXXXXXXXXX");
+                eprintln!("Searching for {i}");
                 */
-            }
-        }
+                let v = AbstractVector::Unstored(datum);
+                let results = hnsw.search(v, 300, 1);
+                if VectorId(i) == results[0].0 {
+                    1
+                } else {
+                    0
+                }
+            })
+            .sum();
         eprintln!("total relevant: {total_relevant}");
         eprintln!("from total: {total}");
         let recall = total_relevant as f32 / total as f32;
