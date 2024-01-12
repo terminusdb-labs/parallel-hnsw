@@ -793,6 +793,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         comparator: C,
         vs: Vec<VectorId>,
         neighborhood_size: usize,
+        new_top: bool,
     ) -> Layer<C, T> {
         assert!(!vs.is_empty(), "tried to construct an empty layer");
         // Parameter for the number of neighbours to look at from the proceeding layer.
@@ -810,11 +811,12 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         // we should *really* consider succinct data structures
         eprintln!("Finding partition groups");
         // 1. Calculate our node id, and find our neighborhood in the above layer
+        let layers: &[Layer<_, _>] = if new_top { &[] } else { &self.layers };
         let initial_partitions = self.immutable.generate_initial_partitions(
             &vs,
             &comparator,
             number_of_supers_to_check,
-            &self.layers,
+            layers,
         );
 
         eprintln!("Generating partition groups");
@@ -961,7 +963,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             } else {
                 neighborhood_size
             };
-            let layer = hnsw.generate_layer(c.clone(), slice.to_vec(), neighbors);
+            let layer = hnsw.generate_layer(c.clone(), slice.to_vec(), neighbors, false);
             hnsw.layers.push(layer)
         }
 
@@ -1393,7 +1395,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             vecs.sort();
             eprintln!("promote {vecs:?}");
             assert!(vecs.len() < 24);
-            let new_layer = self.generate_layer(self.comparator().clone(), vecs, 24);
+            let new_layer = self.generate_layer(self.comparator().clone(), vecs, 24, true);
             eprintln!("done generating cool new layer");
             eprintln!("{:?}", new_layer.nodes);
             eprintln!("{:?}", new_layer.neighbors);
