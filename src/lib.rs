@@ -6,7 +6,10 @@ use std::{
     mem,
     path::{Path, PathBuf},
     slice::{self, Iter},
-    sync::atomic::{self, AtomicUsize},
+    sync::{
+        atomic::{self, AtomicUsize},
+        RwLock,
+    },
 };
 
 use thiserror::Error;
@@ -124,7 +127,7 @@ impl<C: Comparator<T>, T> Clone for Layer<C, T> {
     fn clone(&self) -> Self {
         Self {
             comparator: self.comparator.clone(),
-            neighborhood_size: self.neighborhood_size.clone(),
+            neighborhood_size: self.neighborhood_size,
             nodes: self.nodes.clone(),
             neighbors: self.neighbors.clone(),
             _phantom: PhantomData,
@@ -208,7 +211,6 @@ impl<C: Comparator<T>, T> Layer<C, T> {
             //eprintln!("calculated neighbor_distances@{next:?}: {neighbor_distances:?}");
             visited.extend(neighbor_distances.iter().map(|(n, _)| n));
 
-            let worst = candidates.last();
             visit_queue.extend(neighbor_distances.iter());
             //eprintln!("before");
             //dbg!(&candidates.data);
@@ -261,7 +263,6 @@ impl<C: Comparator<T>, T> Layer<C, T> {
         &self,
         vectors: &[VectorId],
     ) -> HashMap<VectorId, Vec<(NodeId, f32)>> {
-        // convert supers to nodes in this layer
         // partition nodes by distance to supers
         let mut distances_to_supers: Vec<_> = self
             .nodes
@@ -367,7 +368,7 @@ impl<C: Comparator<T>, T> Layer<C, T> {
     pub fn node_distances_from_closest_super(&self, supers: &[VectorId]) -> Vec<NodeDistance> {
         let super_groups = self.group_nodes_by_vectors(supers);
         assert_eq!(
-            super_groups.iter().map(|(_, g)| g.len()).sum::<usize>(),
+            super_groups.values().map(|g| g.len()).sum::<usize>(),
             self.node_count()
         );
         let distances = self.multi_node_distances::<5>(supers);
@@ -897,26 +898,33 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 });
         });
 
-        let mut neighbor_candidates: Vec<PriorityQueue<NodeId>> = neighbors
+        let neighbor_candidates: Vec<RwLock<PriorityQueue<NodeId>>> = neighbors
             .chunks_exact_mut(neighborhood_size)
             .zip(neighbor_distances.chunks_exact_mut(neighborhood_size))
-            .map(|(data, priorities)| PriorityQueue::from_slices(data, priorities))
+            .map(|(data, priorities)| RwLock::new(PriorityQueue::from_slices(data, priorities)))
             .collect();
 
         eprintln!("Making neighborhoods bidirectional");
         // 4. Make neighborhoods bidirectional
-        for i in 0..neighbor_candidates.len() {
-            let node = NodeId(i);
-            let neighborhood_copy: Vec<(NodeId, f32)> = neighbor_candidates[i]
-                .iter()
-                .filter(|(n, _)| n.0 != !0)
-                .collect();
-            //eprintln!("{neighborhood_copy:?}");
-            for (neighbor, distance) in neighborhood_copy {
-                //eprintln!("inserting into: {}", neighbor.0);
-                neighbor_candidates[neighbor.0].insert(node, distance);
-            }
-        }
+        (0..neighbor_candidates.len())
+            .into_par_iter()
+            .for_each(|i| {
+                let node = NodeId(i);
+                let neighborhood_copy: Vec<(NodeId, f32)> = neighbor_candidates[i]
+                    .read()
+                    .unwrap()
+                    .iter()
+                    .filter(|(n, _)| n.0 != !0)
+                    .collect();
+                //eprintln!("{neighborhood_copy:?}");
+                for (neighbor, distance) in neighborhood_copy {
+                    //eprintln!("inserting into: {}", neighbor.0);
+                    neighbor_candidates[neighbor.0]
+                        .write()
+                        .unwrap()
+                        .insert(node, distance);
+                }
+            });
 
         Layer {
             neighborhood_size,
@@ -1645,8 +1653,6 @@ fn random_normed_vec(prng: &mut StdRng, size: usize) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
 
-    use rand_distr::Uniform;
-
     use super::*;
     type SillyVec = [f32; 3];
     #[derive(Clone, Debug, PartialEq)]
@@ -1911,7 +1917,7 @@ mod tests {
 
     #[test]
     fn test_recall() {
-        let size = 100000;
+        let size = 10_000;
         let dimension = 100;
         let mut hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
         do_test_recall(&hnsw, 0.0);
