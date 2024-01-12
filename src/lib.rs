@@ -1911,35 +1911,15 @@ mod tests {
 
     #[test]
     fn test_recall() {
-        let size = 10000;
+        let size = 100000;
         let dimension = 100;
         let mut hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
         do_test_recall(&hnsw, 0.0);
         eprintln!("time to improve neighborhoods");
         hnsw.improve_neighborhoods();
-        //eprintln!("usize max: {}", !0_usize);
-        //eprintln!("Top nodes after: {:?}", hnsw.layers[0].nodes);
-        /*
-
-        let v = 2706;
-        let n = hnsw.layers[2].get_node(VectorId(v)).unwrap();
-        let nhs = hnsw.layers[1].neighborhood_size;
-        let neighbors = &hnsw.layers[2].neighbors[n.0 * nhs..(n.0 + 1) * nhs];
-        eprintln!("neighbors for {v} after: {:?}", neighbors);
-
-        let v = 101;
-        let n = hnsw.layers[1].get_node(VectorId(v)).unwrap();
-        let nhs = hnsw.layers[1].neighborhood_size;
-        let neighbors = &hnsw.layers[1].neighbors[n.0 * nhs..(n.0 + 1) * nhs];
-
-        eprintln!("neighbors for {v} after: {:?}", neighbors);
-        let nodes = &hnsw.layers[0].nodes;
-        eprintln!("nodes at 0 {:?}", nodes);
-        let neighbors = &hnsw.layers[0].neighbors;
-        eprintln!("neighbors at 0 {:?}", neighbors);
-        let nodes = &hnsw.layers[1].nodes;
-        eprintln!("nodes at 1 {:?}", nodes);
-         */
+        do_test_recall(&hnsw, 0.0);
+        eprintln!("time to promote nodes");
+        hnsw.improve_index();
         do_test_recall(&hnsw, 1.0);
         panic!();
     }
