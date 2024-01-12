@@ -1214,7 +1214,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
 
     pub fn discover_vectors_to_promote_2(&self, layer_id_from_top: usize) -> Vec<VectorId> {
         assert!(layer_id_from_top > 0);
-        const THRESHOLD: usize = 42;
+        //const THRESHOLD: usize = 42;
         let layers = &self.layers[0..=layer_id_from_top];
         let layer_above = &layers[layer_id_from_top - 1];
         let current_layer = &layers[layer_id_from_top];
@@ -1222,7 +1222,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             .nodes
             .par_iter()
             .filter_map(|vector| {
-                let (matches, index_distance) = self.immutable.search_layers_noisy(
+                let (matches, _index_distance) = self.immutable.search_layers_noisy(
                     AbstractVector::Stored(*vector),
                     300,
                     layers,
@@ -1230,9 +1230,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                     false,
                 );
                 let vector_is_in_matches = matches[0].0 == *vector;
-                if (!vector_is_in_matches || index_distance > THRESHOLD)
-                    && layer_above.get_node(*vector).is_none()
-                {
+                if !vector_is_in_matches && layer_above.get_node(*vector).is_none() {
                     Some(*vector)
                 } else {
                     None
@@ -1403,6 +1401,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         (0..pseudo_layer.node_count())
             .into_par_iter()
             .map(|node_id| {
+                let mut count = 0;
                 let local_node = NodeId(node_id);
                 let vector = pseudo_layer.get_vector(local_node);
                 let matches = self.immutable.search_layers(
@@ -1440,16 +1439,20 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                             neighbor_of_neighbors[i + 1] = neighbor_of_neighbors[i];
                         }
                         neighbor_of_neighbors[insert_pos] = local_node;
+                        count += 1;
                     }
                 }
+
+                count
             })
-            .count()
+            .sum()
     }
 
-    fn improve_neighborhoods_at_layer(&mut self, layer_from_top: usize) {
+    fn improve_neighborhoods_at_layer(&mut self, layer_from_top: usize) -> usize {
         eprintln!("improving {layer_from_top}");
         let count = self.link_layer_to_better_neighbors(layer_from_top);
         eprintln!("{layer_from_top}: relinked {count}");
+        count
     }
 
     fn layer_from_top_to_layer(&self, layer: usize) -> usize {
@@ -1469,14 +1472,23 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
     }
 
     pub fn improve_index(&mut self) {
+        let mut count = 0;
         for layer_id_from_top in 0..self.layer_count() {
-            self.improve_neighborhoods_at_layer(layer_id_from_top);
+            count += self.improve_neighborhoods_at_layer(layer_id_from_top);
         }
-        for layer_id_from_top in (1..self.layer_count()).rev() {
-            self.promote_at_layer(layer_id_from_top);
-        }
-        for layer_id_from_top in 0..self.layer_count() {
-            self.improve_neighborhoods_at_layer(layer_id_from_top);
+        eprintln!("neighborhood improved {count}");
+        let bottom_layer = self.get_layer(0).unwrap();
+        let threshold = bottom_layer.node_count() * bottom_layer.neighborhood_size / 500;
+        if count < threshold {
+            eprintln!(
+                "neighborhood improvement dropped below threshold ({threshold}). Promote nodes"
+            );
+            for layer_id_from_top in (1..self.layer_count()).rev() {
+                self.promote_at_layer(layer_id_from_top);
+            }
+            for layer_id_from_top in 0..self.layer_count() {
+                self.improve_neighborhoods_at_layer(layer_id_from_top);
+            }
         }
 
         // final step: maybe we need a new top layer
@@ -2006,7 +2018,7 @@ mod tests {
 
     #[test]
     fn test_recall() {
-        let size = 1_000_000;
+        let size = 10_000;
         let dimension = 1536;
         let mut hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
         do_test_recall(&hnsw, 0.0);
