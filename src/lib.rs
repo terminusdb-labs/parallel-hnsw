@@ -1469,6 +1469,9 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
     }
 
     pub fn improve_index(&mut self) {
+        for layer_id_from_top in 0..self.layer_count() {
+            self.improve_neighborhoods_at_layer(layer_id_from_top);
+        }
         for layer_id_from_top in (1..self.layer_count()).rev() {
             self.promote_at_layer(layer_id_from_top);
         }
