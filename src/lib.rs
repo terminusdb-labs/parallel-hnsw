@@ -1911,11 +1911,15 @@ mod tests {
         let mut hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
         do_test_recall(&hnsw, 0.0);
         let mut improvement_count = 0;
+        let mut last_recall = 1.0;
         let mut last_improvement = 1.0;
         while last_improvement > 0.01 {
             eprintln!("{improvement_count} time to improve neighborhoods");
             hnsw.improve_neighborhoods();
-            last_improvement = do_test_recall(&hnsw, 0.0);
+            let new_recall = do_test_recall(&hnsw, 0.0);
+            last_improvement = new_recall - last_recall;
+            last_recall = new_recall;
+            eprintln!("improved index by {last_improvement}");
             improvement_count += 1;
         }
         eprintln!("time to promote nodes");
