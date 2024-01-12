@@ -8,7 +8,7 @@ use std::{
     slice::{self, Iter},
     sync::{
         atomic::{self, AtomicUsize},
-        RwLock,
+        Arc, RwLock,
     },
 };
 
@@ -968,6 +968,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             };
             let layer = hnsw.generate_layer(c.clone(), slice.to_vec(), neighbors, false);
             hnsw.layers.push(layer);
+            eprintln!("linking to better neighbors");
             hnsw.link_layer_to_better_neighbors(i);
         }
 
@@ -1609,7 +1610,9 @@ pub fn make_random_hnsw(count: usize, dimension: usize) -> Hnsw<BigComparator, B
             random_normed_vec(&mut prng, dimension)
         })
         .collect();
-    let c = BigComparator { data };
+    let c = BigComparator {
+        data: Arc::new(data),
+    };
     let vs: Vec<_> = (0..count).map(VectorId).collect();
     let m = 24;
     let m0 = 48;
@@ -1620,7 +1623,7 @@ pub fn make_random_hnsw(count: usize, dimension: usize) -> Hnsw<BigComparator, B
 pub type BigVec = Vec<f32>;
 #[derive(Clone, Debug, PartialEq)]
 pub struct BigComparator {
-    pub data: Vec<BigVec>,
+    pub data: Arc<Vec<BigVec>>,
 }
 
 impl Comparator<BigVec> for BigComparator {
@@ -1646,7 +1649,9 @@ impl Comparator<BigVec> for BigComparator {
     }
 
     fn deserialize<P: AsRef<Path>>(_path: P, _: ()) -> Result<BigComparator, SerializationError> {
-        Ok(BigComparator { data: Vec::new() })
+        Ok(BigComparator {
+            data: Arc::new(Vec::new()),
+        })
     }
 }
 
