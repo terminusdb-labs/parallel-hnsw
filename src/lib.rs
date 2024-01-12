@@ -629,8 +629,11 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
                 //eprintln!("ivd: {initial_vector_distances:?}");
                 let initial_node_distances: Vec<_> = initial_vector_distances
                     .into_iter()
-                    .map(|(vector_id, distance)| {
-                        (NodeId(vs.binary_search(&vector_id).unwrap()), distance)
+                    .map(|(inner_vector_id, distance)| {
+                        (
+                            NodeId(vs.binary_search(&inner_vector_id).unwrap()),
+                            distance,
+                        )
                     })
                     .collect();
                 (NodeId(node_id), *vector_id, initial_node_distances)
@@ -964,7 +967,8 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 neighborhood_size
             };
             let layer = hnsw.generate_layer(c.clone(), slice.to_vec(), neighbors, false);
-            hnsw.layers.push(layer)
+            hnsw.layers.push(layer);
+            hnsw.link_layer_to_better_neighbors(i);
         }
 
         hnsw
