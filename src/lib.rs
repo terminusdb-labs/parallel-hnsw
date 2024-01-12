@@ -1912,6 +1912,9 @@ mod tests {
         let dimension = 1536;
         let mut hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
         do_test_recall(&hnsw, 0.0);
+        eprintln!("initial neighborhood improvement");
+        hnsw.improve_neighborhoods();
+        do_test_recall(&hnsw, 0.0);
         eprintln!("time to promote nodes");
         hnsw.improve_index();
         do_test_recall(&hnsw, 0.0);
