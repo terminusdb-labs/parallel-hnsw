@@ -507,7 +507,7 @@ impl<C: Comparator<T>, T> Layer<C, T> {
 
         let to_promote: Vec<_> = bottom_distances
             .iter()
-            .take_while(|(_, _, d)| *d > 48)
+            .take_while(|(_, _, d)| *d == usize::MAX)
             .map(|(n, _, _)| *n)
             .collect();
 
@@ -1910,6 +1910,9 @@ mod tests {
         let dimension = 1536;
         let mut hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
         do_test_recall(&hnsw, 0.0);
+        eprintln!("time to promote nodes");
+        hnsw.improve_index();
+        do_test_recall(&hnsw, 0.0);
         let mut improvement_count = 0;
         let mut last_recall = 1.0;
         let mut last_improvement = 1.0;
@@ -1922,8 +1925,6 @@ mod tests {
             eprintln!("improved index by {last_improvement}");
             improvement_count += 1;
         }
-        eprintln!("time to promote nodes");
-        hnsw.improve_index();
         do_test_recall(&hnsw, 1.0);
         panic!();
     }
