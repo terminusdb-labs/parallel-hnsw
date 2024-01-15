@@ -830,7 +830,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         // eprintln!("total_size: {total_size}");
         // eprintln!("layer count: {layer_count}");
         let partitions = calculate_partitions(total_size, neighborhood_size);
-        assert!(partitions.len() > 0);
+        assert!(!partitions.is_empty());
         let layer_count = partitions.len();
         let layers = Vec::with_capacity(layer_count);
         let mut hnsw: Hnsw<C, T> = Hnsw {
@@ -1462,18 +1462,20 @@ fn generate_node_maps<C: Comparator<T> + 'static, T: Sync + 'static>(
                 layer.nodes.push(*new_nodes_iter.next().unwrap());
                 new_nodes_map.push(layer.nodes.len() - 1);
             }
-            (Some(old), Some(new)) => {
-                if old == new {
-                    panic!("tried to insert vector that already exists in this layer");
-                } else if old < new {
+            (Some(old), Some(new)) => match old.cmp(new) {
+                std::cmp::Ordering::Equal => {
+                    panic!("tried to insert vector that already exists in this layer")
+                }
+                std::cmp::Ordering::Less => {
                     layer.nodes.push(*old_nodes_iter.next().unwrap());
                     old_nodes_map.push(layer.nodes.len() - 1);
-                } else {
+                }
+                std::cmp::Ordering::Greater => {
                     vecs.push(**new);
                     layer.nodes.push(*new_nodes_iter.next().unwrap());
                     new_nodes_map.push(layer.nodes.len() - 1);
                 }
-            }
+            },
         }
     }
     (old_nodes, old_nodes_map, new_nodes_map, vecs)
