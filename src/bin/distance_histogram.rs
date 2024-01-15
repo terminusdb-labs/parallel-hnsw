@@ -1,4 +1,5 @@
-use parallel_hnsw::{make_random_hnsw, NodeId};
+use parallel_hnsw::bigvec::make_random_hnsw;
+use parallel_hnsw::NodeId;
 
 pub fn main() {
     let mut hnsw = make_random_hnsw(100000, 100);

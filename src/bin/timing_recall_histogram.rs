@@ -1,7 +1,10 @@
 use rayon::prelude::*;
 use std::time::SystemTime;
 
-use parallel_hnsw::{make_random_hnsw, AbstractVector, BigComparator, BigVec, Hnsw, VectorId};
+use parallel_hnsw::{
+    bigvec::{make_random_hnsw, BigComparator, BigVec},
+    AbstractVector, Hnsw, VectorId,
+};
 fn do_test_recall(hnsw: &Hnsw<BigComparator, BigVec>) -> f32 {
     let data = &hnsw.layers[0].comparator.data;
     let total = data.len();

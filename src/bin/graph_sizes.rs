@@ -1,6 +1,7 @@
+use parallel_hnsw::bigvec::{make_random_hnsw, BigComparator, BigVec};
 use std::time::Instant;
 
-use parallel_hnsw::{make_random_hnsw, AbstractVector, BigComparator, BigVec, Hnsw, VectorId};
+use parallel_hnsw::{AbstractVector, Hnsw, VectorId};
 use rayon::prelude::*;
 fn do_test_recall(hnsw: &Hnsw<BigComparator, BigVec>) -> usize {
     let data = &hnsw.comparator().data;

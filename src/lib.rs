@@ -1,3 +1,4 @@
+pub mod bigvec;
 mod search;
 
 use std::{
@@ -10,7 +11,7 @@ use std::{
     slice::{self, Iter},
     sync::{
         atomic::{self, AtomicUsize},
-        Arc, RwLock,
+        RwLock,
     },
 };
 
@@ -18,7 +19,7 @@ use thiserror::Error;
 
 use itertools::Itertools;
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
-use rand_distr::{Distribution, Exp, Uniform};
+use rand_distr::{Distribution, Exp};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
@@ -1576,70 +1577,10 @@ fn calculate_partitions(total_size: usize, neighborhood_size: usize) -> Vec<usiz
     partitions
 }
 
-pub fn make_random_hnsw(count: usize, dimension: usize) -> Hnsw<BigComparator, BigVec> {
-    let data: Vec<Vec<f32>> = (0..count)
-        .into_par_iter()
-        .map(move |i| {
-            let mut prng = StdRng::seed_from_u64(42_u64 + i as u64);
-            random_normed_vec(&mut prng, dimension)
-        })
-        .collect();
-    let c = BigComparator {
-        data: Arc::new(data),
-    };
-    let vs: Vec<_> = (0..count).map(VectorId).collect();
-    let m = 24;
-    let m0 = 48;
-    let hnsw: Hnsw<BigComparator, BigVec> = Hnsw::generate(c, vs, m, m0);
-    hnsw
-}
-
-pub type BigVec = Vec<f32>;
-#[derive(Clone, Debug, PartialEq)]
-pub struct BigComparator {
-    pub data: Arc<Vec<BigVec>>,
-}
-
-impl Comparator<BigVec> for BigComparator {
-    type Params = ();
-    fn compare_vec(&self, v1: AbstractVector<BigVec>, v2: AbstractVector<BigVec>) -> f32 {
-        let v1 = match v1 {
-            AbstractVector::Stored(i) => &self.data[i.0],
-            AbstractVector::Unstored(v) => v,
-        };
-        let v2 = match v2 {
-            AbstractVector::Stored(i) => &self.data[i.0],
-            AbstractVector::Unstored(v) => v,
-        };
-        let mut result = 0.0;
-        for (&f1, &f2) in v1.iter().zip(v2.iter()) {
-            result += f1 * f2
-        }
-        1.0 - result
-    }
-
-    fn serialize<P: AsRef<Path>>(&self, _path: P) -> Result<(), SerializationError> {
-        Ok(())
-    }
-
-    fn deserialize<P: AsRef<Path>>(_path: P, _: ()) -> Result<BigComparator, SerializationError> {
-        Ok(BigComparator {
-            data: Arc::new(Vec::new()),
-        })
-    }
-}
-
-fn random_normed_vec(prng: &mut StdRng, size: usize) -> Vec<f32> {
-    let range = Uniform::from(0.0..1.0);
-    let vec: Vec<f32> = prng.sample_iter(&range).take(size).collect();
-    let norm = vec.iter().map(|f| f * f).sum::<f32>().sqrt();
-    let res = vec.iter().map(|f| f / norm).collect();
-    res
-}
-
 #[cfg(test)]
 mod tests {
 
+    use super::bigvec::*;
     use super::*;
     type SillyVec = [f32; 3];
     #[derive(Clone, Debug, PartialEq)]
@@ -1872,7 +1813,7 @@ mod tests {
     fn test_supers() {
         let size = 10000;
         let dimension = 10;
-        let hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
+        let hnsw: Hnsw<BigComparator, BigVec> = bigvec::make_random_hnsw(size, dimension);
         //eprintln!("Top neighbors: {:?}", hnsw.layers[0].neighbors);
         let supers_1 = hnsw.supers_for_layer(0);
         let supers_2 = hnsw.supers_for_layer(0);
@@ -1895,7 +1836,7 @@ mod tests {
     fn test_recall() {
         let size = 1_000_0;
         let dimension = 1536;
-        let mut hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
+        let mut hnsw: Hnsw<BigComparator, BigVec> = bigvec::make_random_hnsw(size, dimension);
         do_test_recall(&hnsw, 0.0);
         let mut improvement_count = 0;
         let mut last_recall = 0.0;
