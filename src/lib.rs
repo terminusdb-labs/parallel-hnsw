@@ -1495,7 +1495,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                     self.comparator().clone(),
                     vecs,
                     self.neighborhood_size,
-                    self.zero_layer_neighborhood_size,
+                    self.neighborhood_size,
                 );
                 let mut layers = new_top.layers;
                 eprintln!("generated {} new top layers", layers.len());
@@ -1739,7 +1739,7 @@ fn calculate_partitions(total_size: usize, neighborhood_size: usize) -> Vec<usiz
     let mut partitions: Vec<usize> = vec![];
     let mut size = total_size;
     let order = neighborhood_size * 2;
-    let layer_count = (total_size as f32).log(order as f32).ceil() as usize;
+    let layer_count = usize::max(1, (total_size as f32).log(order as f32).ceil() as usize);
     for _ in 0..layer_count {
         partitions.push(size);
         size /= order;
@@ -2112,5 +2112,11 @@ mod tests {
             let results = hnsw.search(v, 9, 1);
             assert_eq!(VectorId(i), results[0].0)
         }
+    }
+
+    #[test]
+    fn test_partitions_with_single_entry() {
+        let partitions = calculate_partitions(1, 24);
+        assert_eq!(1, partitions.len());
     }
 }
