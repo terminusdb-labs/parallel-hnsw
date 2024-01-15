@@ -14,7 +14,6 @@ use std::{
     },
 };
 
-use search::HnswSearcher;
 use thiserror::Error;
 
 use itertools::Itertools;
@@ -657,7 +656,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         number_of_candidates: usize,
         probe_depth: usize,
     ) -> Vec<(VectorId, f32)> {
-        HnswSearcher::search_layers(v, number_of_candidates, &self.layers, probe_depth)
+        search::search_layers(v, number_of_candidates, &self.layers, probe_depth)
     }
 
     pub fn search_noisy(
@@ -667,7 +666,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         probe_depth: usize,
         noisy: bool,
     ) -> (Vec<(VectorId, f32)>, usize) {
-        HnswSearcher::search_layers_noisy(v, number_of_candidates, &self.layers, probe_depth, noisy)
+        search::search_layers_noisy(v, number_of_candidates, &self.layers, probe_depth, noisy)
     }
 
     pub fn generate_layer(
@@ -694,7 +693,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         eprintln!("Finding partition groups");
         // 1. Calculate our node id, and find our neighborhood in the above layer
         let layers: &[Layer<_, _>] = if new_top { &[] } else { &self.layers };
-        let initial_partitions = HnswSearcher::generate_initial_partitions(
+        let initial_partitions = search::generate_initial_partitions(
             &vs,
             &comparator,
             number_of_supers_to_check,
@@ -1082,7 +1081,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             .nodes
             .par_iter()
             .filter_map(|vector| {
-                let (matches, _index_distance) = HnswSearcher::search_layers_noisy(
+                let (matches, _index_distance) = search::search_layers_noisy(
                     AbstractVector::Stored(*vector),
                     300,
                     layers,
@@ -1159,7 +1158,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         let mut neighborhood_candidates: Vec<(NodeId, NodeId, f32)> = vecs
             .par_iter()
             .flat_map(|v| {
-                let mut distances: Vec<(VectorId, f32)> = HnswSearcher::search_layers(
+                let mut distances: Vec<(VectorId, f32)> = search::search_layers(
                     AbstractVector::Stored(*v),
                     10 * layer.neighborhood_size,
                     &pseudo_layers,
@@ -1265,12 +1264,8 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 let mut count = 0;
                 let local_node = NodeId(node_id);
                 let vector = pseudo_layer.get_vector(local_node);
-                let matches = HnswSearcher::search_layers(
-                    AbstractVector::Stored(vector),
-                    300,
-                    &pseudo_stack,
-                    1,
-                );
+                let matches =
+                    search::search_layers(AbstractVector::Stored(vector), 300, &pseudo_stack, 1);
                 for (neighbor_vec, distance) in matches.into_iter().take(10) {
                     if neighbor_vec == vector {
                         break;
