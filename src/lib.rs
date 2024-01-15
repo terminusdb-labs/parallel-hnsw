@@ -610,6 +610,8 @@ impl<C: Comparator<T>, T: Sync> Default for HnswSearcher<C, T> {
 pub struct Hnsw<C: Comparator<T>, T: Sync> {
     pub layers: Vec<Layer<C, T>>,
     immutable: HnswSearcher<C, T>,
+    neighborhood_size: usize,
+    zero_layer_neighborhood_size: usize,
 }
 
 impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
@@ -992,6 +994,8 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         let mut hnsw: Hnsw<C, T> = Hnsw {
             layers,
             immutable: HnswSearcher::default(),
+            neighborhood_size,
+            zero_layer_neighborhood_size,
         };
         for (i, length) in partitions.iter().enumerate() {
             let level = layer_count - i - 1;
@@ -1022,8 +1026,14 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             .open(hnsw_meta)?;
         eprintln!("opened hnsw file");
         let layer_count = self.layer_count();
+        let neighborhood_size = self.neighborhood_size;
+        let zero_layer_neighborhood_size = self.zero_layer_neighborhood_size;
 
-        let serialized = serde_json::to_string(&HNSWMeta { layer_count })?;
+        let serialized = serde_json::to_string(&HNSWMeta {
+            layer_count,
+            neighborhood_size,
+            zero_layer_neighborhood_size,
+        })?;
         eprintln!("serialized data");
         hnsw_meta_file.write_all(serialized.as_bytes())?;
         eprintln!("serialized to file");
@@ -1103,7 +1113,11 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         let mut hnsw_meta_file = OpenOptions::new().read(true).open(dbg!(hnsw_meta))?;
         let mut contents = String::new();
         hnsw_meta_file.read_to_string(&mut contents)?;
-        let HNSWMeta { layer_count }: HNSWMeta = serde_json::from_str(&contents)?;
+        let HNSWMeta {
+            layer_count,
+            neighborhood_size,
+            zero_layer_neighborhood_size,
+        }: HNSWMeta = serde_json::from_str(&contents)?;
 
         let mut hnsw_comparator_path: PathBuf = dbg!(path.as_ref().into());
         hnsw_comparator_path.push("comparator");
@@ -1172,6 +1186,8 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             Ok(Some(Hnsw {
                 layers,
                 immutable: HnswSearcher::default(),
+                neighborhood_size,
+                zero_layer_neighborhood_size,
             }))
         } else {
             Ok(None)
@@ -1213,10 +1229,13 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
     }
 
     pub fn discover_vectors_to_promote_2(&self, layer_id_from_top: usize) -> Vec<VectorId> {
-        assert!(layer_id_from_top > 0);
         //const THRESHOLD: usize = 42;
         let layers = &self.layers[0..=layer_id_from_top];
-        let layer_above = &layers[layer_id_from_top - 1];
+        let layer_above = if layer_id_from_top == 0 {
+            None
+        } else {
+            Some(&layers[layer_id_from_top - 1])
+        };
         let current_layer = &layers[layer_id_from_top];
         current_layer
             .nodes
@@ -1230,7 +1249,9 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                     false,
                 );
                 let vector_is_in_matches = matches[0].0 == *vector;
-                if !vector_is_in_matches && layer_above.get_node(*vector).is_none() {
+                if !vector_is_in_matches
+                    && (layer_above.is_none() || layer_above.unwrap().get_node(*vector).is_none())
+                {
                     Some(*vector)
                 } else {
                     None
@@ -1460,14 +1481,29 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
     }
 
     fn promote_at_layer(&mut self, layer_from_top: usize) -> usize {
-        assert!(layer_from_top > 0);
-        let vecs = self.discover_vectors_to_promote_2(layer_from_top);
+        let mut vecs = self.discover_vectors_to_promote_2(layer_from_top);
+        vecs.sort();
         let count = vecs.len();
         eprintln!("layer_from_top {layer_from_top}: promoting {count} vecs");
         //eprintln!("Vectors to promote: {vecs:?}");
         if count != 0 {
-            let layer_above = self.layer_from_top_to_layer(layer_from_top - 1);
-            self.extend_layer(layer_above, vecs);
+            if layer_from_top == 0 {
+                // generate new layer(s)
+                let new_top = Self::generate(
+                    self.comparator().clone(),
+                    vecs,
+                    self.neighborhood_size,
+                    self.zero_layer_neighborhood_size,
+                );
+                let mut layers = new_top.layers;
+                std::mem::swap(&mut self.layers, &mut layers);
+                eprintln!("generated {} new top layers", layers.len());
+                self.layers.extend(layers);
+            } else {
+                // extend existing layer
+                let layer_above = self.layer_from_top_to_layer(layer_from_top - 1);
+                self.extend_layer(layer_above, vecs);
+            }
         }
 
         count
@@ -1482,21 +1518,18 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             let mut iteration = 0;
             while count > threshold {
                 count = self.improve_neighborhoods_at_layer(layer_id_from_top);
-                eprintln!("layer {layer_id_from_top} iteration {iteration}: improved {count}");
+                eprintln!("layer {layer_id_from_top} iteration {iteration}: improved {count} (threshold {threshold})");
                 iteration += 1;
             }
 
-            // TODO make this also work for top layers
-            if layer_id_from_top > 0 {
-                let promoted = self.promote_at_layer(layer_id_from_top);
-                if promoted > 0 {
-                    eprintln!("layer {layer_id_from_top}: promoted {promoted} nodes");
-                    // since we promoted, it's a good idea to go back up one layer and do optimization there again
-                    layer_id_from_top -= 1;
-                    continue;
-                }
+            let promoted = self.promote_at_layer(layer_id_from_top);
+            if promoted > 0 {
+                eprintln!("layer {layer_id_from_top}: promoted {promoted} nodes");
+                // since we promoted, it's a good idea to go back up one layer and do optimization there again
+                layer_id_from_top -= 1;
+            } else {
+                layer_id_from_top += 1;
             }
-            layer_id_from_top += 1
         }
 
         // final step: maybe we need a new top layer
@@ -1641,6 +1674,8 @@ pub struct LayerMeta {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct HNSWMeta {
     pub layer_count: usize,
+    pub neighborhood_size: usize,
+    pub zero_layer_neighborhood_size: usize,
 }
 
 fn choose_n_1(
