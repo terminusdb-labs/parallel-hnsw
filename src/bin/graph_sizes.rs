@@ -4,7 +4,7 @@ use parallel_hnsw::{make_random_hnsw, AbstractVector, BigComparator, BigVec, Hns
 use rayon::prelude::*;
 fn do_test_recall(hnsw: &Hnsw<BigComparator, BigVec>) -> usize {
     let data = &hnsw.comparator().data;
-    let total = data.len();
+    let _total = data.len();
     let total_relevant: usize = data
         .par_iter()
         .enumerate()

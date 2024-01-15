@@ -1311,10 +1311,12 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         count
     }
 
+    #[allow(unused)]
     fn layer_from_top_to_layer(&self, layer: usize) -> usize {
         self.layer_count() - layer - 1
     }
 
+    #[allow(unused)]
     fn promote_at_layer(&mut self, layer_from_top: usize) -> (usize, usize) {
         let mut vecs = self.discover_vectors_to_promote_2(layer_from_top);
         vecs.sort();

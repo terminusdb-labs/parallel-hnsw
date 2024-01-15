@@ -1,7 +1,5 @@
-use parallel_hnsw::{
-    make_random_hnsw, AbstractVector, Comparator, Hnsw, NodeId, OrderedFloat, VectorId,
-};
-use rand::{rngs::StdRng, seq::SliceRandom, thread_rng, Rng, SeedableRng};
+use parallel_hnsw::{AbstractVector, Comparator, Hnsw, OrderedFloat, VectorId};
+use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 use rand_distr::Uniform;
 use rayon::prelude::*;
 
@@ -32,14 +30,14 @@ impl Comparator<f32> for ScalarComparator {
 
     fn serialize<P: AsRef<std::path::Path>>(
         &self,
-        path: P,
+        _path: P,
     ) -> Result<(), parallel_hnsw::SerializationError> {
         todo!()
     }
 
     fn deserialize<P: AsRef<std::path::Path>>(
-        path: P,
-        params: Self::Params,
+        _path: P,
+        _params: Self::Params,
     ) -> Result<Self, parallel_hnsw::SerializationError> {
         todo!()
     }
@@ -65,7 +63,7 @@ fn make_random_scalar_hnsw(count: usize) -> Hnsw<ScalarComparator, f32> {
 
 fn do_test_recall(hnsw: &Hnsw<ScalarComparator, f32>) -> Vec<usize> {
     let data = &hnsw.comparator().data;
-    let total = data.len();
+    let _total = data.len();
     let unrecallable_vecs: Vec<_> = data
         .par_iter()
         .enumerate()
@@ -84,7 +82,7 @@ fn do_test_recall(hnsw: &Hnsw<ScalarComparator, f32>) -> Vec<usize> {
 }
 
 pub fn main() {
-    let mut hnsw = make_random_scalar_hnsw(1000000);
+    let hnsw = make_random_scalar_hnsw(1000000);
     let unrecallable_vecs = do_test_recall(&hnsw);
     assert_ne!(0, unrecallable_vecs.len());
     /*
