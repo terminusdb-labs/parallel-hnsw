@@ -34,8 +34,10 @@ fn do_test_recall(hnsw: &Hnsw<BigComparator, BigVec>) -> f32 {
 
 pub fn main() {
     println!("\"dimensions\",\"count\",\"construction_time\",\"improvement_time\",\"improvement_iterations\",\"initial_recall\",\"final_recall\"");
-    let counts = [10_000, 100_000, 1_000_000];
-    let dimensions = [128, 768, 1024, 1536];
+    //let counts = [10_000, 100_000, 1_000_000];
+    //let dimensions = [128, 768, 1024, 1536];
+    let counts = [10_000_000];
+    let dimensions = [1536];
     for dimension in dimensions {
         for count in counts.iter() {
             let start_time = SystemTime::now();
