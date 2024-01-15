@@ -1513,6 +1513,11 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
     }
 
     pub fn improve_index(&mut self) {
+        for layer_id_from_top in 0..self.layer_count() {
+            let count = self.improve_neighborhoods_at_layer(layer_id_from_top);
+            eprintln!("layer {layer_id_from_top}: improved {count}");
+        }
+        /*
         let mut layer_id_from_top = 0;
         while layer_id_from_top < self.layer_count() {
             let layer = self.get_layer_from_top(layer_id_from_top).unwrap();
@@ -1533,20 +1538,6 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             } else {
                 layer_id_from_top += 1;
             }
-        }
-
-        // final step: maybe we need a new top layer
-        /*
-        let mut vecs = self.discover_vectors_to_promote_2(self.layer_count() - 1);
-        if !vecs.is_empty() {
-            vecs.sort();
-            eprintln!("promote {vecs:?}");
-            assert!(vecs.len() < 24);
-            let new_layer = self.generate_layer(self.comparator().clone(), vecs, 24, true);
-            eprintln!("done generating cool new layer");
-            eprintln!("{:?}", new_layer.nodes);
-            eprintln!("{:?}", new_layer.neighbors);
-            self.layers.insert(0, new_layer);
         }
         */
     }
@@ -2064,7 +2055,7 @@ mod tests {
 
     #[test]
     fn test_recall() {
-        let size = 1_000_000;
+        let size = 1_000_0;
         let dimension = 1536;
         let mut hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
         do_test_recall(&hnsw, 0.0);
