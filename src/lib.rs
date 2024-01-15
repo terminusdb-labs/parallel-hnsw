@@ -1459,36 +1459,44 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         self.layer_count() - layer - 1
     }
 
-    fn promote_at_layer(&mut self, layer_from_top: usize) {
+    fn promote_at_layer(&mut self, layer_from_top: usize) -> usize {
         assert!(layer_from_top > 0);
         let vecs = self.discover_vectors_to_promote_2(layer_from_top);
-        eprintln!(
-            "layer_from_top {layer_from_top}: promoting {} vecs",
-            vecs.len()
-        );
+        let count = vecs.len();
+        eprintln!("layer_from_top {layer_from_top}: promoting {count} vecs");
         //eprintln!("Vectors to promote: {vecs:?}");
-        let layer_above = self.layer_from_top_to_layer(layer_from_top - 1);
-        self.extend_layer(layer_above, vecs)
+        if count != 0 {
+            let layer_above = self.layer_from_top_to_layer(layer_from_top - 1);
+            self.extend_layer(layer_above, vecs);
+        }
+
+        count
     }
 
     pub fn improve_index(&mut self) {
-        let mut count = 0;
-        for layer_id_from_top in 0..self.layer_count() {
-            count += self.improve_neighborhoods_at_layer(layer_id_from_top);
-        }
-        eprintln!("neighborhood improved {count}");
-        let bottom_layer = self.get_layer(0).unwrap();
-        let threshold = bottom_layer.node_count() * bottom_layer.neighborhood_size / 500;
-        if count < threshold {
-            eprintln!(
-                "neighborhood improvement dropped below threshold ({threshold}). Promote nodes"
-            );
-            for layer_id_from_top in (1..self.layer_count()).rev() {
-                self.promote_at_layer(layer_id_from_top);
+        let mut layer_id_from_top = 0;
+        while layer_id_from_top < self.layer_count() {
+            let layer = self.get_layer_from_top(layer_id_from_top).unwrap();
+            let threshold = layer.node_count() * layer.neighborhood_size / 100;
+            let mut count = usize::MAX;
+            let mut iteration = 0;
+            while count > threshold {
+                count = self.improve_neighborhoods_at_layer(layer_id_from_top);
+                eprintln!("layer {layer_id_from_top} iteration {iteration}: improved {count}");
+                iteration += 1;
             }
-            for layer_id_from_top in 0..self.layer_count() {
-                self.improve_neighborhoods_at_layer(layer_id_from_top);
+
+            // TODO make this also work for top layers
+            if layer_id_from_top > 0 {
+                let promoted = self.promote_at_layer(layer_id_from_top);
+                if promoted > 0 {
+                    eprintln!("layer {layer_id_from_top}: promoted {promoted} nodes");
+                    // since we promoted, it's a good idea to go back up one layer and do optimization there again
+                    layer_id_from_top -= 1;
+                    continue;
+                }
             }
+            layer_id_from_top += 1
         }
 
         // final step: maybe we need a new top layer
