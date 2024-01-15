@@ -32,7 +32,7 @@ fn do_test_recall(hnsw: &Hnsw<BigComparator, BigVec>) -> f32 {
 }
 
 pub fn main() {
-    println!("\"dimensions\",\"count\",\"construction_time\",\"improvement_time\",\"initial_recall\",\"final_recall\"");
+    println!("\"dimensions\",\"count\",\"construction_time\",\"improvement_time\",\"improvement_iterations\",\"initial_recall\",\"final_recall\"");
     let counts = [10_000, 100_000, 1_000_000];
     let dimensions = [128, 768, 1024, 1536];
     for dimension in dimensions {
@@ -44,7 +44,9 @@ pub fn main() {
             let mut last_recall = initial_recall;
             let mut improvement = f32::MAX;
             let mut total_improvement_time = 0;
+            let mut iteration = 0;
             while improvement > 0.001 {
+                iteration += 1;
                 let start_time = SystemTime::now();
                 hnsw.improve_index();
                 let hnsw_improvement_time = start_time.elapsed().unwrap();
@@ -54,7 +56,7 @@ pub fn main() {
                 last_recall = new_recall;
             }
 
-            println!("{dimension},{count},{hnsw_construction_time},{total_improvement_time},{initial_recall},{last_recall}");
+            println!("{dimension},{count},{hnsw_construction_time},{total_improvement_time},{iteration},{initial_recall},{last_recall}");
         }
     }
 }
