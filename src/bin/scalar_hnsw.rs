@@ -1,4 +1,6 @@
-use parallel_hnsw::{AbstractVector, Comparator, Hnsw, OrderedFloat, VectorId};
+use parallel_hnsw::{
+    serialize::SerializationError, AbstractVector, Comparator, Hnsw, OrderedFloat, VectorId,
+};
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 use rand_distr::Uniform;
 use rayon::prelude::*;
@@ -28,17 +30,14 @@ impl Comparator<f32> for ScalarComparator {
         (self.value_for(v1) - self.value_for(v2)).abs()
     }
 
-    fn serialize<P: AsRef<std::path::Path>>(
-        &self,
-        _path: P,
-    ) -> Result<(), parallel_hnsw::SerializationError> {
+    fn serialize<P: AsRef<std::path::Path>>(&self, _path: P) -> Result<(), SerializationError> {
         todo!()
     }
 
     fn deserialize<P: AsRef<std::path::Path>>(
         _path: P,
         _params: Self::Params,
-    ) -> Result<Self, parallel_hnsw::SerializationError> {
+    ) -> Result<Self, SerializationError> {
         todo!()
     }
 }
