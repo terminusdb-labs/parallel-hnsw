@@ -38,7 +38,7 @@ pub fn main() {
     for dimension in dimensions {
         for count in counts.iter() {
             let start_time = SystemTime::now();
-            let mut hnsw = make_random_hnsw(100000, 100);
+            let mut hnsw = make_random_hnsw(*count, dimension);
             let hnsw_construction_time = start_time.elapsed().unwrap().as_millis();
             let initial_recall = do_test_recall(&hnsw);
             let mut last_recall = initial_recall;
