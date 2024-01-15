@@ -1480,7 +1480,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         self.layer_count() - layer - 1
     }
 
-    fn promote_at_layer(&mut self, layer_from_top: usize) -> usize {
+    fn promote_at_layer(&mut self, layer_from_top: usize) -> (usize, usize) {
         let mut vecs = self.discover_vectors_to_promote_2(layer_from_top);
         vecs.sort();
         let count = vecs.len();
@@ -1499,14 +1499,16 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 eprintln!("generated {} new top layers", layers.len());
                 std::mem::swap(&mut self.layers, &mut layers);
                 self.layers.extend(layers);
+                return (count, 0);
             } else {
                 // extend existing layer
                 let layer_above = self.layer_from_top_to_layer(layer_from_top - 1);
                 self.extend_layer(layer_above, vecs);
+                return (count, layer_from_top - 1);
             }
         }
 
-        count
+        (0, layer_from_top)
     }
 
     pub fn improve_index(&mut self) {
@@ -1522,11 +1524,11 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                 iteration += 1;
             }
 
-            let promoted = self.promote_at_layer(layer_id_from_top);
+            let (promoted, changed_layer) = self.promote_at_layer(layer_id_from_top);
             if promoted > 0 {
-                eprintln!("layer {layer_id_from_top}: promoted {promoted} nodes");
+                eprintln!("layer {layer_id_from_top}: promoted {promoted} nodes. going back to layer {changed_layer}");
                 // since we promoted, it's a good idea to go back up one layer and do optimization there again
-                layer_id_from_top -= 1;
+                layer_id_from_top = changed_layer;
             } else {
                 layer_id_from_top += 1;
             }
