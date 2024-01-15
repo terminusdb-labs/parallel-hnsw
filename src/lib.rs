@@ -1,5 +1,8 @@
 pub mod bigvec;
+mod priority_queue;
 mod search;
+mod types;
+pub use types::*;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -25,67 +28,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::io::{Read, Write};
 
-use crate::priority_queue::{EmptyValue, PriorityQueue};
-
-#[derive(PartialEq, Eq, Debug, PartialOrd, Ord, Clone, Copy, Hash)]
-pub struct VectorId(pub usize);
-#[derive(PartialEq, Eq, Debug, PartialOrd, Ord, Clone, Copy, Hash)]
-pub struct NodeId(pub usize);
-
-impl VectorId {
-    const MAX: Self = Self(!0);
-}
-impl NodeId {
-    const MAX: Self = Self(!0);
-}
-
-impl EmptyValue for NodeId {
-    fn is_empty(&self) -> bool {
-        self.0 == !0
-    }
-
-    fn empty() -> Self {
-        Self::MAX
-    }
-}
-
-impl EmptyValue for VectorId {
-    fn is_empty(&self) -> bool {
-        self.0 == !0
-    }
-
-    fn empty() -> Self {
-        Self::MAX
-    }
-}
-
-mod priority_queue;
-
-pub enum AbstractVector<'a, T> {
-    Stored(VectorId),
-    Unstored(&'a T),
-}
-
-impl<'a, T> Debug for AbstractVector<'a, T>
-where
-    T: Debug,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Stored(arg0) => f.debug_tuple("Stored").field(arg0).finish(),
-            Self::Unstored(arg0) => f.debug_tuple("Unstored").field(arg0).finish(),
-        }
-    }
-}
-
-impl<'a, T> Clone for AbstractVector<'a, T> {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Stored(arg0) => Self::Stored(*arg0),
-            Self::Unstored(arg0) => Self::Unstored(arg0),
-        }
-    }
-}
+use crate::priority_queue::PriorityQueue;
 
 #[derive(Error, Debug)]
 pub enum SerializationError {
@@ -104,19 +47,6 @@ pub trait Comparator<T>: Sync + Clone {
         params: Self::Params,
     ) -> Result<Self, SerializationError>;
 }
-
-#[derive(PartialEq, PartialOrd, Clone, Copy, Debug)]
-pub struct OrderedFloat(pub f32);
-
-impl Eq for OrderedFloat {}
-
-#[allow(clippy::derive_ord_xor_partial_ord)]
-impl Ord for OrderedFloat {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.partial_cmp(other).unwrap()
-    }
-}
-
 #[derive(PartialEq, PartialOrd, Debug)]
 pub struct Layer<C: Comparator<T>, T> {
     pub comparator: C,

@@ -1,8 +1,9 @@
 use rayon::prelude::*;
 
 use crate::{
-    priority_queue::PriorityQueue, AbstractVector, Comparator, Layer, NodeDistances, NodeId,
-    OrderedFloat, VectorId,
+    priority_queue::PriorityQueue,
+    types::{AbstractVector, NodeId, OrderedFloat, VectorId},
+    Comparator, Layer, NodeDistances,
 };
 pub fn entry_vector<C: Comparator<T>, T, L: AsRef<Layer<C, T>>>(layers: &[L]) -> VectorId {
     layers[0].as_ref().nodes[0]

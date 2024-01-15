@@ -1,4 +1,4 @@
-use crate::OrderedFloat;
+use crate::types::{EmptyValue, OrderedFloat};
 
 #[derive(Debug)]
 pub enum VecOrSlice<'a, T> {
@@ -28,11 +28,6 @@ impl<T> std::ops::DerefMut for VecOrSlice<'_, T> {
 pub struct PriorityQueue<'a, Id: Clone> {
     pub data: VecOrSlice<'a, Id>,
     pub priorities: VecOrSlice<'a, f32>,
-}
-
-pub trait EmptyValue {
-    fn is_empty(&self) -> bool;
-    fn empty() -> Self;
 }
 
 impl<'a, Id: PartialOrd + PartialEq + Copy + EmptyValue> PriorityQueue<'a, Id> {

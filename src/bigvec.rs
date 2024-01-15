@@ -1,6 +1,9 @@
 use std::{path::Path, sync::Arc};
 
-use crate::{AbstractVector, Comparator, Hnsw, SerializationError, VectorId};
+use crate::{
+    types::{AbstractVector, VectorId},
+    Comparator, Hnsw, SerializationError,
+};
 
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use rand_distr::Uniform;
