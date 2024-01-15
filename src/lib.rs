@@ -2064,7 +2064,7 @@ mod tests {
 
     #[test]
     fn test_recall() {
-        let size = 1_000_0;
+        let size = 1_000_000;
         let dimension = 1536;
         let mut hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
         do_test_recall(&hnsw, 0.0);
