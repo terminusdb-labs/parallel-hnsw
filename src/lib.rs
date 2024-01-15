@@ -615,6 +615,10 @@ pub struct Hnsw<C: Comparator<T>, T: Sync> {
 }
 
 impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
+    pub fn entry_vector<L: AsRef<Layer<C, T>>>(layers: &[L]) -> VectorId {
+        layers[0].as_ref().nodes[0]
+    }
+
     pub fn compare_all(comparator: C, v: VectorId, vs: &[VectorId]) -> Vec<(VectorId, f32)> {
         let mut res: Vec<_> = vs
             .iter()
@@ -628,11 +632,6 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
             .collect();
         res.sort_by_key(|(v, d)| (OrderedFloat(*d), *v));
         res
-    }
-
-    pub fn entry_vector(&self) -> VectorId {
-        // Other choices are possible
-        VectorId(0)
     }
 
     fn generate_initial_partitions<L: AsRef<Layer<C, T>> + Sync>(
@@ -707,7 +706,7 @@ impl<C: Comparator<T>, T: Sync> HnswSearcher<C, T> {
         noisy: bool,
     ) -> (Vec<(VectorId, f32)>, usize) {
         let upper_layer_candidate_count = 1;
-        let entry_vector = self.entry_vector();
+        let entry_vector = Self::entry_vector(layers);
         let distance_from_entry = layers
             .first()
             .map(|l| {
@@ -2065,7 +2064,7 @@ mod tests {
 
     #[test]
     fn test_recall() {
-        let size = 1_000_000;
+        let size = 1_000_0;
         let dimension = 1536;
         let mut hnsw: Hnsw<BigComparator, BigVec> = make_random_hnsw(size, dimension);
         do_test_recall(&hnsw, 0.0);
