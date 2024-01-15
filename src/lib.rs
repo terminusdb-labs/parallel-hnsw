@@ -1496,8 +1496,8 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                     self.zero_layer_neighborhood_size,
                 );
                 let mut layers = new_top.layers;
-                std::mem::swap(&mut self.layers, &mut layers);
                 eprintln!("generated {} new top layers", layers.len());
+                std::mem::swap(&mut self.layers, &mut layers);
                 self.layers.extend(layers);
             } else {
                 // extend existing layer
