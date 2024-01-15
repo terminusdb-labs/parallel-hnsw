@@ -985,10 +985,12 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         zero_layer_neighborhood_size: usize,
     ) -> Self {
         let total_size = vs.len();
+        assert!(total_size > 0);
         // eprintln!("neighborhood_size: {neighborhood_size}");
         // eprintln!("total_size: {total_size}");
         // eprintln!("layer count: {layer_count}");
         let partitions = calculate_partitions(total_size, neighborhood_size);
+        assert!(partitions.len() > 0);
         let layer_count = partitions.len();
         let layers = Vec::with_capacity(layer_count);
         let mut hnsw: Hnsw<C, T> = Hnsw {
