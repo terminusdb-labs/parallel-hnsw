@@ -1008,8 +1008,8 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             };
             let layer = hnsw.generate_layer(c.clone(), slice.to_vec(), neighbors, false);
             hnsw.layers.push(layer);
-            eprintln!("linking to better neighbors");
-            hnsw.link_layer_to_better_neighbors(i);
+            //eprintln!("linking to better neighbors");
+            //hnsw.link_layer_to_better_neighbors(i);
         }
 
         hnsw
