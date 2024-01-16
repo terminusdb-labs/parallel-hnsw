@@ -181,6 +181,7 @@ pub fn main() {
     let mut last_recall = initial_recall;
     let mut improvement = f32::MAX;
     let mut iteration = 0;
+    eprintln!("Improving index");
     while improvement > 0.001 {
         iteration += 1;
         qhnsw.improve_index();
