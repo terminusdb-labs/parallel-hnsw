@@ -151,7 +151,7 @@ pub fn main() {
     let m = 24;
     let m0 = 48;
     let hnsw: Hnsw<BigComparator, BigVec> = Hnsw::generate(c, vectors, m, m0);
-    let vec_number = 10000;
+    let vec_number = 100_000;
     let vecs: Vec<Vec<f32>> = (0..vec_number)
         .into_par_iter()
         .map(move |i| {
