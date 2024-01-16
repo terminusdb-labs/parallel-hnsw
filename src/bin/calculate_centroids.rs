@@ -1,10 +1,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use linfa::prelude::*;
-use linfa::traits::{Fit, FitWith, Predict};
+use linfa::traits::Fit;
 use linfa::DatasetBase;
-use linfa_clustering::{IncrKMeansError, KMeans, KMeansParams};
+use linfa_clustering::KMeans;
 use ndarray::Array;
 use parallel_hnsw::bigvec::{BigComparator, BigVec};
 use parallel_hnsw::serialize::SerializationError;
