@@ -180,10 +180,8 @@ pub fn main() {
     let initial_recall = do_test_recall(&qhnsw);
     let mut last_recall = initial_recall;
     let mut improvement = f32::MAX;
-    let mut iteration = 0;
     eprintln!("Improving index");
     while improvement > 0.001 {
-        iteration += 1;
         qhnsw.improve_index();
         let new_recall = do_test_recall(&qhnsw);
         improvement = new_recall - last_recall;
