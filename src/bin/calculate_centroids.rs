@@ -152,7 +152,7 @@ pub fn main() {
     let m = 24;
     let m0 = 48;
     let hnsw: Hnsw<BigComparator, BigVec> = Hnsw::generate(c, vectors, m, m0);
-    let vec_number = 100_000;
+    let vec_number = 1_000_000;
     let vecs: Vec<Vec<f32>> = (0..vec_number)
         .into_par_iter()
         .map(move |i| {
@@ -176,7 +176,16 @@ pub fn main() {
         / qvecs.len() as f32;
     eprintln!("Average reconstruction cost: {avg_reconstruction_cost}");
     cc.data = Arc::new(qvecs);
-    let qhnsw: Hnsw<CentroidComparator, QuantizedVec> = Hnsw::generate(cc, vec_ids, m, m0);
-    let recall = do_test_recall(&qhnsw);
-    eprintln!("recall of: {recall}");
+    let mut qhnsw: Hnsw<CentroidComparator, QuantizedVec> = Hnsw::generate(cc, vec_ids, m, m0);
+    let initial_recall = do_test_recall(&qhnsw);
+    let mut last_recall = initial_recall;
+    let mut improvement = f32::MAX;
+    let mut iteration = 0;
+    while improvement > 0.001 {
+        iteration += 1;
+        qhnsw.improve_index();
+        let new_recall = do_test_recall(&qhnsw);
+        improvement = new_recall - last_recall;
+        last_recall = new_recall;
+    }
 }
