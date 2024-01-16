@@ -30,37 +30,52 @@ impl CentroidComparator {
         assert_eq!(len % self.centroid_size, 0);
         let mut vec: Vec<usize> = Vec::with_capacity(parts);
         for v in vin.chunks(parts) {
-            let distances = self.hnsw.search(AbstractVector::Unstored(vin), 100, 2);
+            let distances = self
+                .hnsw
+                .search(AbstractVector::Unstored(&v.to_vec()), 100, 2);
             vec.push(distances[0].0 .0)
         }
         vec
     }
+
+    fn reconstruct(&self, vin: &QuantizedVec) -> Vec<f32> {
+        let size = self.centroid_size * vin.len();
+        let mut v = Vec::with_capacity(size);
+        for i in vin {
+            v.extend(self.centroids[*i].iter())
+        }
+        v
+    }
+}
+
+// assumes normalized vectors
+fn cosine(v1: &Vec<f32>, v2: &Vec<f32>) -> f32 {
+    (1.0 - v1
+        .iter()
+        .zip(v2.iter())
+        .map(|(f1, f2)| f1 * f2)
+        .sum::<f32>())
+        / 2.0
 }
 
 impl Comparator<QuantizedVec> for CentroidComparator {
     type Params = ();
     fn compare_vec(
         &self,
-        v1: AbstractVector<QuantizedVec>,
-        v2: AbstractVector<QuantizedVec>,
+        aqv1: AbstractVector<QuantizedVec>,
+        aqv2: AbstractVector<QuantizedVec>,
     ) -> f32 {
-        let v1 = match v1 {
+        let qv1 = match aqv1 {
             AbstractVector::Stored(i) => &self.data[i.0],
             AbstractVector::Unstored(v) => v,
         };
-        let v2 = match v2 {
+        let qv2 = match aqv2 {
             AbstractVector::Stored(i) => &self.data[i.0],
             AbstractVector::Unstored(v) => v,
         };
-        let mut result = 0.0;
-        for (&u1, &u2) in v1.iter().zip(v2.iter()) {
-            let w_1 = &self.centroids[u1];
-            let w_2 = &self.centroids[u2];
-            for (&f1, &f2) in w_1.iter().zip(w_2.iter()) {
-                result += f1 * f2
-            }
-        }
-        (1.0 - result) / 2.0
+        let v1 = self.reconstruct(qv1);
+        let v2 = self.reconstruct(qv2);
+        cosine(&v1, &v2)
     }
 
     fn serialize<P: AsRef<Path>>(&self, _path: P) -> Result<(), SerializationError> {
@@ -152,6 +167,13 @@ pub fn main() {
         centroid_size: sub_dimension,
     };
     let qvecs: Vec<QuantizedVec> = vecs.iter().map(|v| cc.quantize(v)).collect();
+    let avg_reconstruction_cost = qvecs
+        .iter()
+        .zip(vecs.iter())
+        .map(|(qv, v)| cosine(v, &cc.reconstruct(qv)))
+        .sum::<f32>()
+        / qvecs.len() as f32;
+    eprintln!("Average reconstruction cost: {avg_reconstruction_cost}");
     cc.data = Arc::new(qvecs);
     let qhnsw: Hnsw<CentroidComparator, QuantizedVec> = Hnsw::generate(cc, vec_ids, m, m0);
     let recall = do_test_recall(&qhnsw);
