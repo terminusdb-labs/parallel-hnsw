@@ -135,10 +135,12 @@ pub fn main() {
     let data: Vec<f32> = random_normed_vec(&mut prng, dimension * count);
     let sub_arrays = Array::from_shape_vec((sub_dimension, sub_length), data).unwrap();
     let observations = DatasetBase::from(sub_arrays.clone());
+    eprintln!("Starting clustering");
     let model = KMeans::params_with_rng(clusters, prng.clone())
         .tolerance(1e-2)
         .fit(&observations)
         .expect("KMeans fitted");
+    eprintln!("centroids discovered");
     let centroid_flat: Vec<f32> = model.centroids().clone().into_raw_vec();
     let centroids: Vec<Vec<f32>> = centroid_flat
         .chunks(sub_dimension)
