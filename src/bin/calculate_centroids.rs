@@ -24,17 +24,16 @@ pub struct CentroidComparator {
 }
 
 impl CentroidComparator {
-    fn quantize(&self, v1: &Vec<f32>) -> QuantizedVec {
-        let len = v1.len();
-        let fsize = len as f32 / self.centroid_size as f32;
-        assert!(fsize <= f32::MIN);
+    fn quantize(&self, vin: &Vec<f32>) -> QuantizedVec {
+        let len = vin.len();
         let parts = len / self.centroid_size;
-        let mut v = Vec::with_capacity(parts);
-        for i in 0..parts {
-            let distances = self.hnsw.search(AbstractVector::Unstored(v1), 100, 2);
-            v.push(distances[0].0 .0)
+        assert_eq!(len % self.centroid_size, 0);
+        let mut vec: Vec<usize> = Vec::with_capacity(parts);
+        for v in vin.chunks(parts) {
+            let distances = self.hnsw.search(AbstractVector::Unstored(vin), 100, 2);
+            vec.push(distances[0].0 .0)
         }
-        v
+        vec
     }
 }
 
@@ -56,7 +55,7 @@ impl Comparator<QuantizedVec> for CentroidComparator {
         let mut result = 0.0;
         for (&u1, &u2) in v1.iter().zip(v2.iter()) {
             let w_1 = &self.centroids[u1];
-            let w_2 = &self.centroids[u1];
+            let w_2 = &self.centroids[u2];
             for (&f1, &f2) in w_1.iter().zip(w_2.iter()) {
                 result += f1 * f2
             }
@@ -112,7 +111,7 @@ fn do_test_recall(hnsw: &Hnsw<CentroidComparator, QuantizedVec>) -> f32 {
 }
 
 pub fn main() {
-    let count = 10000;
+    let count = 100;
     let clusters = 100;
     let dimension = 1536; // 32 * 48
     let sub_dimension = 32;
