@@ -1,5 +1,16 @@
+use clap::Parser;
 use rayon::prelude::*;
 use std::time::SystemTime;
+
+#[derive(Parser, Debug)]
+struct Cmd {
+    #[arg(required(true), short, long, num_args(1..))]
+    dimensions: Vec<usize>,
+    #[arg(required(true), short, long, num_args(1..))]
+    counts: Vec<usize>,
+    #[arg(short, long, default_value_t = 0.001)]
+    threshold: f32,
+}
 
 use parallel_hnsw::{
     bigvec::{make_random_hnsw, BigComparator, BigVec},
@@ -33,9 +44,12 @@ fn do_test_recall(hnsw: &Hnsw<BigComparator, BigVec>) -> f32 {
 }
 
 pub fn main() {
+    let Cmd {
+        dimensions,
+        counts,
+        threshold,
+    } = Cmd::parse();
     println!("\"dimensions\",\"count\",\"construction_time\",\"improvement_time\",\"improvement_iterations\",\"initial_recall\",\"final_recall\"");
-    let counts = [10_000, 100_000, 1_000_000];
-    let dimensions = [128, 768, 1024, 1536];
     for dimension in dimensions {
         for count in counts.iter() {
             let start_time = SystemTime::now();
@@ -46,7 +60,7 @@ pub fn main() {
             let mut improvement = f32::MAX;
             let mut total_improvement_time = 0;
             let mut iteration = 0;
-            while improvement > 0.001 {
+            while improvement > threshold {
                 iteration += 1;
                 let start_time = SystemTime::now();
                 hnsw.improve_index();
