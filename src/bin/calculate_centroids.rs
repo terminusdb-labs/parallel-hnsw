@@ -125,8 +125,8 @@ fn do_test_recall(hnsw: &Hnsw<CentroidComparator, QuantizedVec>) -> f32 {
 }
 
 pub fn main() {
-    let count = 10000;
-    let clusters = 10000;
+    let count = 1000;
+    let clusters = 1000;
     let dimension = 1536; // 32 * 48
     let sub_dimension = 32;
     let sub_length = dimension * count / sub_dimension;
