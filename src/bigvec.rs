@@ -10,6 +10,15 @@ use rand_distr::Uniform;
 use rayon::prelude::*;
 
 pub fn make_random_hnsw(count: usize, dimension: usize) -> Hnsw<BigComparator, BigVec> {
+    let order = 24;
+    make_random_hnsw_with_order(count, dimension, order)
+}
+
+pub fn make_random_hnsw_with_order(
+    count: usize,
+    dimension: usize,
+    order: usize,
+) -> Hnsw<BigComparator, BigVec> {
     let data: Vec<Vec<f32>> = (0..count)
         .into_par_iter()
         .map(move |i| {
@@ -23,7 +32,7 @@ pub fn make_random_hnsw(count: usize, dimension: usize) -> Hnsw<BigComparator, B
     let vs: Vec<_> = (0..count).map(VectorId).collect();
     let m = 24;
     let m0 = 48;
-    let hnsw: Hnsw<BigComparator, BigVec> = Hnsw::generate(c, vs, m, m0);
+    let hnsw: Hnsw<BigComparator, BigVec> = Hnsw::generate(c, vs, m, m0, order);
     hnsw
 }
 

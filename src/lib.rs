@@ -517,6 +517,7 @@ impl NodeDistance {
 #[derive(PartialEq, PartialOrd, Debug)]
 pub struct Hnsw<C: Comparator<T>, T: Sync> {
     pub layers: Vec<Layer<C, T>>,
+    order: usize,
     neighborhood_size: usize,
     zero_layer_neighborhood_size: usize,
 }
@@ -742,13 +743,14 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         vs: Vec<VectorId>,
         neighborhood_size: usize,
         zero_layer_neighborhood_size: usize,
+        order: usize,
     ) -> Self {
         let total_size = vs.len();
         assert!(total_size > 0);
         // eprintln!("neighborhood_size: {neighborhood_size}");
         // eprintln!("total_size: {total_size}");
         // eprintln!("layer count: {layer_count}");
-        let partitions = calculate_partitions(total_size, neighborhood_size);
+        let partitions = calculate_partitions(total_size, order);
         assert!(!partitions.is_empty());
         let layer_count = partitions.len();
         let layers = Vec::with_capacity(layer_count);
@@ -756,6 +758,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             layers,
             neighborhood_size,
             zero_layer_neighborhood_size,
+            order,
         };
         for (i, length) in partitions.iter().enumerate() {
             let level = layer_count - i - 1;
@@ -779,6 +782,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         serialize::serialize_hnsw(
             self.neighborhood_size,
             self.zero_layer_neighborhood_size,
+            self.order,
             &self.layers,
             path,
         )
@@ -1088,6 +1092,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
                     vecs,
                     self.neighborhood_size,
                     self.neighborhood_size,
+                    self.order,
                 );
                 let mut layers = new_top.layers;
                 eprintln!("generated {} new top layers", layers.len());
@@ -1307,10 +1312,9 @@ fn choose_n(
     set.into_iter().collect()
 }
 
-fn calculate_partitions(total_size: usize, neighborhood_size: usize) -> Vec<usize> {
+fn calculate_partitions(total_size: usize, order: usize) -> Vec<usize> {
     let mut partitions: Vec<usize> = vec![];
     let mut size = total_size;
-    let order = neighborhood_size * 2;
     let layer_count = usize::max(1, (total_size as f32).log(order as f32).ceil() as usize);
     for _ in 0..layer_count {
         partitions.push(size);
@@ -1377,7 +1381,7 @@ mod tests {
         let c = SillyComparator { data: data.clone() };
         let vs: Vec<_> = (0..9).map(VectorId).collect();
 
-        let hnsw: Hnsw<SillyComparator, SillyVec> = Hnsw::generate(c, vs, 3, 6);
+        let hnsw: Hnsw<SillyComparator, SillyVec> = Hnsw::generate(c, vs, 3, 6, 6);
         hnsw
     }
 
@@ -1398,13 +1402,14 @@ mod tests {
         let c = SillyComparator { data: data.clone() };
         let vs: Vec<_> = (0..9).map(VectorId).collect(); // only index 8 first..
 
-        let mut hnsw: Hnsw<SillyComparator, SillyVec> = Hnsw::generate(c, vs, 3, 6);
+        let mut hnsw: Hnsw<SillyComparator, SillyVec> = Hnsw::generate(c, vs, 3, 6, 6);
         let bottom = &mut hnsw.layers[1];
         // add a ninth disconnected vector
         bottom.nodes.push(VectorId(9));
         bottom.neighbors.extend(vec![NodeId(!0); 6]);
         hnsw
     }
+
     #[test]
     fn test_nearness_search() {
         let hnsw: Hnsw<SillyComparator, SillyVec> = make_simple_hnsw();
@@ -1630,5 +1635,29 @@ mod tests {
     fn test_partitions_with_single_entry() {
         let partitions = calculate_partitions(1, 24);
         assert_eq!(1, partitions.len());
+    }
+
+    #[test]
+    fn test_neighborhood_order() {
+        let size = 10_000;
+        let dimension = 1536;
+        let order = 48;
+        let mut hnsw: Hnsw<BigComparator, BigVec> =
+            bigvec::make_random_hnsw_with_order(size, dimension, order);
+        do_test_recall(&hnsw, 0.0);
+        let mut improvement_count = 0;
+        let mut last_recall = 0.0;
+        let mut last_improvement = 1.0;
+        while last_improvement > 0.001 {
+            eprintln!("{improvement_count} time to improve index");
+            hnsw.improve_index();
+            let new_recall = do_test_recall(&hnsw, 0.0);
+            last_improvement = new_recall - last_recall;
+            last_recall = new_recall;
+            eprintln!("improved index by {last_improvement}");
+            improvement_count += 1;
+            eprintln!("=========");
+        }
+        panic!();
     }
 }

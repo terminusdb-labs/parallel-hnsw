@@ -27,11 +27,13 @@ pub struct HNSWMeta {
     pub layer_count: usize,
     pub neighborhood_size: usize,
     pub zero_layer_neighborhood_size: usize,
+    pub order: usize,
 }
 
 pub fn serialize_hnsw<T, C: Comparator<T>, P: AsRef<Path>>(
     neighborhood_size: usize,
     zero_layer_neighborhood_size: usize,
+    order: usize,
     layers: &[Layer<C, T>],
     path: P,
 ) -> Result<(), SerializationError> {
@@ -51,6 +53,7 @@ pub fn serialize_hnsw<T, C: Comparator<T>, P: AsRef<Path>>(
         layer_count,
         neighborhood_size,
         zero_layer_neighborhood_size,
+        order,
     })?;
     eprintln!("serialized data");
     hnsw_meta_file.write_all(serialized.as_bytes())?;
@@ -133,6 +136,7 @@ pub fn deserialize_hnsw<T: Sync, C: Comparator<T>, P: AsRef<Path>>(
         layer_count,
         neighborhood_size,
         zero_layer_neighborhood_size,
+        order,
     }: HNSWMeta = serde_json::from_str(&contents)?;
 
     let mut hnsw_comparator_path: PathBuf = dbg!(path.as_ref().into());
@@ -203,6 +207,7 @@ pub fn deserialize_hnsw<T: Sync, C: Comparator<T>, P: AsRef<Path>>(
             layers,
             neighborhood_size,
             zero_layer_neighborhood_size,
+            order,
         }))
     } else {
         Ok(None)

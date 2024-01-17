@@ -56,7 +56,8 @@ fn make_random_scalar_hnsw(count: usize) -> Hnsw<ScalarComparator, f32> {
     let vs: Vec<_> = (0..count).map(VectorId).collect();
     let m = 24;
     let m0 = 48;
-    let hnsw: Hnsw<ScalarComparator, f32> = Hnsw::generate(c, vs, m, m0);
+    let order = 24;
+    let hnsw: Hnsw<ScalarComparator, f32> = Hnsw::generate(c, vs, m, m0, order);
     hnsw
 }
 
