@@ -10,10 +10,12 @@ struct Cmd {
     counts: Vec<usize>,
     #[arg(short, long, default_value_t = 0.001)]
     threshold: f32,
+    #[arg(short, long, default_value_t = 24)]
+    order: usize,
 }
 
 use parallel_hnsw::{
-    bigvec::{make_random_hnsw, BigComparator, BigVec},
+    bigvec::{make_random_hnsw_with_order, BigComparator, BigVec},
     AbstractVector, Hnsw, VectorId,
 };
 fn do_test_recall(hnsw: &Hnsw<BigComparator, BigVec>) -> f32 {
@@ -48,12 +50,13 @@ pub fn main() {
         dimensions,
         counts,
         threshold,
+        order,
     } = Cmd::parse();
     println!("\"dimensions\",\"count\",\"construction_time\",\"improvement_time\",\"improvement_iterations\",\"initial_recall\",\"final_recall\"");
     for dimension in dimensions {
         for count in counts.iter() {
             let start_time = SystemTime::now();
-            let mut hnsw = make_random_hnsw(*count, dimension);
+            let mut hnsw = make_random_hnsw_with_order(*count, dimension, order);
             let hnsw_construction_time = start_time.elapsed().unwrap().as_millis();
             let initial_recall = do_test_recall(&hnsw);
             let mut last_recall = initial_recall;
