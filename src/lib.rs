@@ -1641,13 +1641,25 @@ mod tests {
     fn test_neighborhood_order() {
         let size = 10_000;
         let dimension = 1536;
-        let order = 48;
-        let mut hnsw: Hnsw<BigComparator, BigVec> =
-            bigvec::make_random_hnsw_with_order(size, dimension, order);
-        do_test_recall(&hnsw, 0.0);
+        let orders = vec![6, 12, 24];
+        let mut best = 0.0_f32;
+        let mut best_order = usize::MAX;
+        let mut best_hnsw = None;
+        for order in orders {
+            let hnsw: Hnsw<BigComparator, BigVec> =
+                bigvec::make_random_hnsw_with_order(size, dimension, order);
+            let recall = do_test_recall(&hnsw, 0.0);
+            if recall > best {
+                best = recall;
+                best_hnsw = Some(hnsw);
+                best_order = order
+            }
+        }
+        eprintln!("best_order: {best_order}");
         let mut improvement_count = 0;
-        let mut last_recall = 0.0;
+        let mut last_recall = best;
         let mut last_improvement = 1.0;
+        let mut hnsw = best_hnsw.unwrap();
         while last_improvement > 0.001 {
             eprintln!("{improvement_count} time to improve index");
             hnsw.improve_index();
@@ -1658,6 +1670,7 @@ mod tests {
             improvement_count += 1;
             eprintln!("=========");
         }
+
         panic!();
     }
 }
