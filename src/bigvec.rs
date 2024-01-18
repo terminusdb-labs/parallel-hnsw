@@ -9,7 +9,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use rand_distr::Uniform;
 use rayon::prelude::*;
 
-pub fn make_random_hnsw(count: usize, dimension: usize) -> Hnsw<BigComparator, BigVec> {
+pub fn make_random_hnsw(count: usize, dimension: usize) -> Hnsw<BigComparator> {
     let order = 24;
     make_random_hnsw_with_order(count, dimension, order)
 }
@@ -18,7 +18,7 @@ pub fn make_random_hnsw_with_order(
     count: usize,
     dimension: usize,
     order: usize,
-) -> Hnsw<BigComparator, BigVec> {
+) -> Hnsw<BigComparator> {
     let data: Vec<Vec<f32>> = (0..count)
         .into_par_iter()
         .map(move |i| {
@@ -32,7 +32,7 @@ pub fn make_random_hnsw_with_order(
     let vs: Vec<_> = (0..count).map(VectorId).collect();
     let m = 24;
     let m0 = 48;
-    let hnsw: Hnsw<BigComparator, BigVec> = Hnsw::generate(c, vs, m, m0, order);
+    let hnsw: Hnsw<BigComparator> = Hnsw::generate(c, vs, m, m0, order);
     hnsw
 }
 
@@ -42,32 +42,18 @@ pub struct BigComparator {
     pub data: Arc<Vec<BigVec>>,
 }
 
-impl Comparator<BigVec> for BigComparator {
+impl Comparator for BigComparator {
     type Params = ();
-    fn compare_vec(&self, v1: AbstractVector<BigVec>, v2: AbstractVector<BigVec>) -> f32 {
-        let v1 = match v1 {
-            AbstractVector::Stored(i) => &self.data[i.0],
-            AbstractVector::Unstored(v) => v,
-        };
-        let v2 = match v2 {
-            AbstractVector::Stored(i) => &self.data[i.0],
-            AbstractVector::Unstored(v) => v,
-        };
+    type T = BigVec;
+    fn compare_raw(&self, v1: &BigVec, v2: &BigVec) -> f32 {
         let mut result = 0.0;
         for (&f1, &f2) in v1.iter().zip(v2.iter()) {
             result += f1 * f2
         }
-        1.0 - result
+        (1.0_f32 - result) / 2.0_f32
     }
-
-    fn serialize<P: AsRef<Path>>(&self, _path: P) -> Result<(), SerializationError> {
-        Ok(())
-    }
-
-    fn deserialize<P: AsRef<Path>>(_path: P, _: ()) -> Result<BigComparator, SerializationError> {
-        Ok(BigComparator {
-            data: Arc::new(Vec::new()),
-        })
+    fn lookup(&self, v: VectorId) -> &BigVec {
+        &self.data[v.0]
     }
 }
 

@@ -5,11 +5,11 @@ use crate::{
     types::{AbstractVector, NodeId, OrderedFloat, VectorId},
     Comparator, Layer, NodeDistances,
 };
-pub fn entry_vector<C: Comparator<T>, T, L: AsRef<Layer<C, T>>>(layers: &[L]) -> VectorId {
+pub fn entry_vector<C: Comparator, L: AsRef<Layer<C>>>(layers: &[L]) -> VectorId {
     layers[0].as_ref().nodes[0]
 }
 
-pub fn compare_all<C: Comparator<T>, T>(
+pub fn compare_all<C: Comparator>(
     comparator: C,
     v: VectorId,
     vs: &[VectorId],
@@ -28,7 +28,7 @@ pub fn compare_all<C: Comparator<T>, T>(
     res
 }
 
-pub fn generate_initial_partitions<C: Comparator<T>, T, L: AsRef<Layer<C, T>> + Sync>(
+pub fn generate_initial_partitions<C: Comparator, L: AsRef<Layer<C>> + Sync>(
     vs: &[VectorId],
     comparator: &C,
     number_of_supers_to_check: usize,
@@ -67,7 +67,7 @@ pub fn generate_initial_partitions<C: Comparator<T>, T, L: AsRef<Layer<C, T>> + 
     initial_partitions
 }
 
-pub fn initial_vector_distances<C: Comparator<T>, T, L: AsRef<Layer<C, T>>>(
+pub fn initial_vector_distances<C: Comparator, L: AsRef<Layer<C>>>(
     v: VectorId,
     number_of_nodes: usize,
     layers: &[L],
@@ -78,8 +78,8 @@ pub fn initial_vector_distances<C: Comparator<T>, T, L: AsRef<Layer<C, T>>>(
         .collect::<Vec<_>>()
 }
 
-pub fn search_layers<C: Comparator<T>, T, L: AsRef<Layer<C, T>>>(
-    v: AbstractVector<T>,
+pub fn search_layers<C: Comparator, L: AsRef<Layer<C>>>(
+    v: AbstractVector<C::T>,
     number_of_candidates: usize,
     layers: &[L],
     probe_depth: usize,
@@ -87,8 +87,8 @@ pub fn search_layers<C: Comparator<T>, T, L: AsRef<Layer<C, T>>>(
     search_layers_noisy(v, number_of_candidates, layers, probe_depth, false).0
 }
 
-pub fn search_layers_noisy<C: Comparator<T>, T, L: AsRef<Layer<C, T>>>(
-    v: AbstractVector<T>,
+pub fn search_layers_noisy<C: Comparator, L: AsRef<Layer<C>>>(
+    v: AbstractVector<C::T>,
     number_of_candidates: usize,
     layers: &[L],
     probe_depth: usize,

@@ -12,17 +12,36 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use rand_distr::Uniform;
 use rayon::prelude::*;
 
+// assumes normalized vectors
+fn cosine(v1: &Vec<f32>, v2: &Vec<f32>) -> f32 {
+    (1.0 - v1
+        .iter()
+        .zip(v2.iter())
+        .map(|(f1, f2)| f1 * f2)
+        .sum::<f32>())
+        / 2.0
+}
+
 pub type QuantizedVec = Vec<usize>;
 
 #[derive(Clone)]
 pub struct CentroidComparator {
     centroid_size: usize,
-    centroids: Arc<Vec<Vec<f32>>>,
+    centroids: Arc<Vec<BigVec>>,
     data: Arc<Vec<QuantizedVec>>,
-    hnsw: Arc<Hnsw<BigComparator, BigVec>>,
+    hnsw: Arc<Hnsw<BigComparator>>,
 }
 
 impl CentroidComparator {
+    fn reconstruct(&self, vin: &QuantizedVec) -> Vec<f32> {
+        let size = self.centroid_size * vin.len();
+        let mut v = Vec::with_capacity(size);
+        for i in vin {
+            v.extend(self.centroids[*i].iter())
+        }
+        v
+    }
+
     fn quantize(&self, vin: &Vec<f32>) -> QuantizedVec {
         let len = vin.len();
         let parts = len / self.centroid_size;
@@ -36,56 +55,16 @@ impl CentroidComparator {
         }
         vec
     }
-
-    fn reconstruct(&self, vin: &QuantizedVec) -> Vec<f32> {
-        let size = self.centroid_size * vin.len();
-        let mut v = Vec::with_capacity(size);
-        for i in vin {
-            v.extend(self.centroids[*i].iter())
-        }
-        v
-    }
 }
-
-// assumes normalized vectors
-fn cosine(v1: &Vec<f32>, v2: &Vec<f32>) -> f32 {
-    (1.0 - v1
-        .iter()
-        .zip(v2.iter())
-        .map(|(f1, f2)| f1 * f2)
-        .sum::<f32>())
-        / 2.0
-}
-
-impl Comparator<QuantizedVec> for CentroidComparator {
+impl Comparator for CentroidComparator {
     type Params = ();
-    fn compare_vec(
-        &self,
-        aqv1: AbstractVector<QuantizedVec>,
-        aqv2: AbstractVector<QuantizedVec>,
-    ) -> f32 {
-        let qv1 = match aqv1 {
-            AbstractVector::Stored(i) => &self.data[i.0],
-            AbstractVector::Unstored(v) => v,
-        };
-        let qv2 = match aqv2 {
-            AbstractVector::Stored(i) => &self.data[i.0],
-            AbstractVector::Unstored(v) => v,
-        };
-        let v1 = self.reconstruct(qv1);
-        let v2 = self.reconstruct(qv2);
-        cosine(&v1, &v2)
+    type T = QuantizedVec;
+    fn lookup(&self, v: VectorId) -> &QuantizedVec {
+        &self.data[v.0]
     }
 
-    fn serialize<P: AsRef<Path>>(&self, _path: P) -> Result<(), SerializationError> {
-        todo!();
-    }
-
-    fn deserialize<P: AsRef<Path>>(
-        _path: P,
-        _: (),
-    ) -> Result<CentroidComparator, SerializationError> {
-        todo!();
+    fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
+        cosine(&self.reconstruct(v1), &self.reconstruct(v2))
     }
 }
 
@@ -97,7 +76,7 @@ fn random_normed_vec(prng: &mut StdRng, size: usize) -> Vec<f32> {
     res
 }
 
-fn do_test_recall(hnsw: &Hnsw<CentroidComparator, QuantizedVec>) -> f32 {
+fn do_test_recall(hnsw: &Hnsw<CentroidComparator>) -> f32 {
     let data = &hnsw.layers[0].comparator.data;
     let total = data.len();
     let total_relevant: usize = data
@@ -152,7 +131,7 @@ pub fn main() {
     let m = 24;
     let m0 = 48;
     let order = 24;
-    let hnsw: Hnsw<BigComparator, BigVec> = Hnsw::generate(c, vectors, m, m0, order);
+    let hnsw: Hnsw<BigComparator> = Hnsw::generate(c, vectors, m, m0, order);
     let vec_number = 1_000_000;
     let vecs: Vec<Vec<f32>> = (0..vec_number)
         .into_par_iter()
@@ -179,8 +158,7 @@ pub fn main() {
         / qvecs.len() as f32;
     eprintln!("Average reconstruction cost: {avg_reconstruction_cost}");
     cc.data = Arc::new(qvecs);
-    let mut qhnsw: Hnsw<CentroidComparator, QuantizedVec> =
-        Hnsw::generate(cc, vec_ids, m, m0, order);
+    let mut qhnsw: Hnsw<CentroidComparator> = Hnsw::generate(cc, vec_ids, m, m0, order);
     let initial_recall = do_test_recall(&qhnsw);
     let mut last_recall = initial_recall;
     let mut improvement = f32::MAX;

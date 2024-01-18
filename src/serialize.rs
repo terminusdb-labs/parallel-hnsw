@@ -30,11 +30,11 @@ pub struct HNSWMeta {
     pub order: usize,
 }
 
-pub fn serialize_hnsw<T, C: Comparator<T>, P: AsRef<Path>>(
+pub fn serialize_hnsw<C: Comparator, P: AsRef<Path>>(
     neighborhood_size: usize,
     zero_layer_neighborhood_size: usize,
     order: usize,
-    layers: &[Layer<C, T>],
+    layers: &[Layer<C>],
     path: P,
 ) -> Result<(), SerializationError> {
     let layer_count = layers.len();
@@ -123,10 +123,10 @@ pub fn serialize_hnsw<T, C: Comparator<T>, P: AsRef<Path>>(
     Ok(())
 }
 
-pub fn deserialize_hnsw<T: Sync, C: Comparator<T>, P: AsRef<Path>>(
+pub fn deserialize_hnsw<C: Comparator, P: AsRef<Path>>(
     path: P,
     params: C::Params,
-) -> Result<Option<Hnsw<C, T>>, SerializationError> {
+) -> Result<Option<Hnsw<C>>, SerializationError> {
     let mut hnsw_meta: PathBuf = path.as_ref().into();
     hnsw_meta.push("meta");
     let mut hnsw_meta_file = OpenOptions::new().read(true).open(dbg!(hnsw_meta))?;
@@ -200,7 +200,6 @@ pub fn deserialize_hnsw<T: Sync, C: Comparator<T>, P: AsRef<Path>>(
                 neighborhood_size,
                 neighbors,
                 nodes,
-                _phantom: PhantomData,
             });
         }
         Ok(Some(Hnsw {
