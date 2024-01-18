@@ -10,7 +10,6 @@ pub use types::*;
 
 use std::{
     collections::{HashMap, HashSet},
-    marker::PhantomData,
     path::Path,
     slice::Iter,
     sync::{
@@ -32,15 +31,15 @@ pub trait Comparator: Sync + Clone {
     type T: ?Sized;
     fn lookup(&self, v: VectorId) -> &Self::T;
     fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32;
+    fn lookup_abstract<'a: 'b, 'b>(&'a self, v: AbstractVector<'b, Self::T>) -> &'b Self::T {
+        match v {
+            AbstractVector::Stored(i) => self.lookup(i),
+            AbstractVector::Unstored(v) => v,
+        }
+    }
     fn compare_vec(&self, v1: AbstractVector<Self::T>, v2: AbstractVector<Self::T>) -> f32 {
-        let v1 = match v1 {
-            AbstractVector::Stored(i) => self.lookup(i),
-            AbstractVector::Unstored(v) => v,
-        };
-        let v2 = match v2 {
-            AbstractVector::Stored(i) => self.lookup(i),
-            AbstractVector::Unstored(v) => v,
-        };
+        let v1 = self.lookup_abstract(v1);
+        let v2 = self.lookup_abstract(v2);
         self.compare_raw(v1, v2)
     }
 

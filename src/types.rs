@@ -42,6 +42,18 @@ pub enum AbstractVector<'a, T: ?Sized> {
     Unstored(&'a T),
 }
 
+impl<'a, T: ?Sized> AbstractVector<'a, T> {
+    pub fn convert_into<T2>(&self) -> AbstractVector<'a, T2>
+    where
+        &'a T: Into<&'a T2>,
+    {
+        match self {
+            AbstractVector::Stored(id) => AbstractVector::Stored(*id),
+            AbstractVector::Unstored(v) => AbstractVector::Unstored((*v).into()),
+        }
+    }
+}
+
 impl<'a, T> Debug for AbstractVector<'a, T>
 where
     T: Debug,

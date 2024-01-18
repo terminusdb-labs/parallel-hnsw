@@ -1,23 +1,10 @@
-use crate::{AbstractVector, Comparator, Hnsw};
+use crate::{AbstractVector, Comparator, Hnsw, VectorId};
 use std::sync::Arc;
 
 trait Quantizer<const SIZE: usize, const SUBDIMENSION: usize> {
     fn quantize(&self, vec: &[f32; SIZE]) -> [u16; SUBDIMENSION];
     fn reconstruct(&self, qvec: &[u16; SUBDIMENSION]) -> [f32; SIZE];
 }
-
-/*
-pub struct QuantizedHnsw<CentroidComparator: Comparator, QuantizedComparator: Comparator> {
-    centroid_size: usize,
-    centroids: Arc<Vec<CentroidComparator::T>>,
-    data: Arc<Vec<QuantizedComparator::T>>,
-    hnsw: Arc<Hnsw<CentroidComparator>>,
-}
-
-pub struct QuantizedComparator {
-    comparator: Comparator,
-}
-*/
 
 pub struct HnswQuantizer<const SIZE: usize, const SUBDIMENSION: usize, C: Comparator<T = [f32]>> {
     centroids: Arc<Vec<[f32; SUBDIMENSION]>>,
@@ -50,30 +37,44 @@ impl<const SIZE: usize, const SUBDIMENSION: usize, C: 'static + Comparator<T = [
     }
 }
 
-/*
-impl Quantizer<32> for QuantizedHnsw<Quantized> {
-    type T = Vec<f32>;
+pub struct QuantizedHnsw<
+    const SIZE: usize,
+    const SUBDIMENSION: usize,
+    CentroidComparator: Comparator<T = [f32]> + 'static,
+    QuantizedComparator: Comparator<T = [u16]> + 'static,
+    FullComparator: Comparator<T = [f32; SIZE]> + 'static,
+> {
+    quantizer: HnswQuantizer<SIZE, SUBDIMENSION, CentroidComparator>,
+    hnsw: Hnsw<QuantizedComparator>,
+    comparator: FullComparator,
+}
 
-    fn quantize(&self, vec: &Self::T) -> &[f32; THIRTY_TWO_QUANTIZER] {
-        let len = vec.len();
-        let parts = len / THIRTY_TWO_QUANTIZER;
-        let mut vec: Vec<usize> = Vec::with_capacity(parts);
-        for v in vin.chunks(parts) {
-            let distances = self
-                .hnsw
-                .search(AbstractVector::Unstored(&v.to_vec()), 100, 2);
-            vec.push(distances[0].0 .0)
-        }
-        vec
+impl<
+        const SIZE: usize,
+        const SUBDIMENSION: usize,
+        CentroidComparator: Comparator<T = [f32]> + 'static,
+        QuantizedComparator: Comparator<T = [u16]> + 'static,
+        FullComparator: Comparator<T = [f32; SIZE]> + 'static,
+    > QuantizedHnsw<SIZE, SUBDIMENSION, CentroidComparator, QuantizedComparator, FullComparator>
+{
+    pub fn new() -> Self {
+        todo!()
     }
 
-    fn reconstruct(&self, qvec: &[u16; THIRTY_TWO_QUANTIZER]) -> Self::T {
-        let size = self.centroid_size * vin.len();
-        let mut v = Vec::with_capacity(size);
-        for i in qvec {
-            v.extend(self.centroids[*i].iter())
-        }
-        v
+    pub fn search(
+        &self,
+        v: AbstractVector<[f32; SIZE]>,
+        number_of_candidates: usize,
+        probe_depth: usize,
+    ) -> Vec<(VectorId, f32)> {
+        let raw_v = self.comparator.lookup_abstract(v);
+        let quantized = self.quantizer.quantize(raw_v);
+        let result = self.hnsw.search(
+            AbstractVector::Unstored(&quantized),
+            number_of_candidates,
+            probe_depth,
+        );
+        // TODO reorder
+        result
     }
 }
-*/
