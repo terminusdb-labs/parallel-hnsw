@@ -29,7 +29,7 @@ use crate::priority_queue::PriorityQueue;
 
 pub trait Comparator: Sync + Clone {
     type Params;
-    type T;
+    type T: ?Sized;
     fn lookup(&self, v: VectorId) -> &Self::T;
     fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32;
     fn compare_vec(&self, v1: AbstractVector<Self::T>, v2: AbstractVector<Self::T>) -> f32 {

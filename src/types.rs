@@ -37,7 +37,7 @@ impl EmptyValue for VectorId {
     }
 }
 
-pub enum AbstractVector<'a, T> {
+pub enum AbstractVector<'a, T: ?Sized> {
     Stored(VectorId),
     Unstored(&'a T),
 }
@@ -54,7 +54,7 @@ where
     }
 }
 
-impl<'a, T> Clone for AbstractVector<'a, T> {
+impl<'a, T: ?Sized> Clone for AbstractVector<'a, T> {
     fn clone(&self) -> Self {
         match self {
             Self::Stored(arg0) => Self::Stored(*arg0),
