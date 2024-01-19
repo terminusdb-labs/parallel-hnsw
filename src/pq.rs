@@ -215,17 +215,33 @@ mod tests {
         }
     }
 
+    struct ReadLockedVec<'a> {
+        lock: RwLockReadGuard<'a, Vec<[f32; 32]>>,
+        id: VectorId,
+    }
+
+    impl<'a> Deref for ReadLockedVec<'a> {
+        type Target = [f32; 32];
+
+        fn deref(&self) -> &Self::Target {
+            &self.lock[self.id.0]
+        }
+    }
+
     #[derive(Clone)]
     struct CentroidComparator32 {
-        data: Arc<Vec<RwLock<[f32; 32]>>>,
+        data: Arc<RwLock<Vec<[f32; 32]>>>,
     }
     impl Comparator for CentroidComparator32 {
         type Params = ();
 
         type T = [f32; 32];
-        type Borrowable<'a> = RwLockReadGuard<'a, Self::T>;
+        type Borrowable<'a> = ReadLockedVec<'a>;
         fn lookup(&self, v: crate::VectorId) -> Self::Borrowable<'_> {
-            self.data[v.0].read().unwrap()
+            ReadLockedVec {
+                lock: self.data.read().unwrap(),
+                id: v,
+            }
         }
 
         fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
@@ -237,12 +253,12 @@ mod tests {
         type T = <CentroidComparator32 as Comparator>::T;
 
         fn store(&self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
-            let data = self.data;
+            let mut data = self.data.write().unwrap();
             let vid = data.len();
             let mut vectors: Vec<VectorId> = Vec::new();
             data.extend(i.enumerate().map(|(i, v)| {
                 vectors.push(VectorId(vid + i));
-                RwLock::new(v)
+                v
             }));
             vectors
         }

@@ -27,27 +27,45 @@ use std::fmt::Debug;
 
 use crate::priority_queue::PriorityQueue;
 
+enum WrappedBorrowable<'a, T: ?Sized, Borrowable: Deref<Target = T> + 'a> {
+    Left(Borrowable),
+    Right(&'a T),
+}
 
+impl<'a, T: ?Sized, Borrowable: Deref<Target = T> + 'a> Deref
+    for WrappedBorrowable<'a, T, Borrowable>
+{
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            WrappedBorrowable::Left(b) => b,
+            WrappedBorrowable::Right(b) => b,
+        }
+    }
+}
 
 pub trait Comparator: Sync + Clone {
     type Params;
     type T: ?Sized;
-    type Borrowable<'a>: Deref;
-
+    type Borrowable<'a>: Deref<Target = Self::T>
     where
         Self: 'a;
     fn lookup(&self, v: VectorId) -> Self::Borrowable<'_>;
     fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32;
-    fn lookup_abstract<'a: 'b, 'b>(&'a self, v: AbstractVector<'b, Self::T>) -> Self::Borrowable<'b> {
+    fn lookup_abstract<'a: 'b, 'b>(
+        &'a self,
+        v: AbstractVector<'b, Self::T>,
+    ) -> WrappedBorrowable<'b, Self::T, Self::Borrowable<'b>> {
         match v {
-            AbstractVector::Stored(i) => &*self.lookup(i),
-            AbstractVector::Unstored(v) => v,
+            AbstractVector::Stored(i) => WrappedBorrowable::Left(self.lookup(i)),
+            AbstractVector::Unstored(v) => WrappedBorrowable::Right(v),
         }
     }
     fn compare_vec(&self, v1: AbstractVector<Self::T>, v2: AbstractVector<Self::T>) -> f32 {
         let v1 = self.lookup_abstract(v1);
         let v2 = self.lookup_abstract(v2);
-        self.compare_raw(v1, v2)
+        self.compare_raw(&*v1, &*v2)
     }
 
     fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
