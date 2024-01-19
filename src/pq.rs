@@ -43,7 +43,7 @@ impl<
         for (ix, i) in qvec.iter().enumerate() {
             let slice = &mut result[ix * CENTROID_SIZE..(ix + 1) * CENTROID_SIZE];
             let centroid = self.hnsw.comparator().lookup(VectorId(*i as usize));
-            slice.copy_from_slice(centroid);
+            slice.copy_from_slice(&*centroid);
         }
         result
     }
@@ -168,7 +168,7 @@ impl<
         probe_depth: usize,
     ) -> Vec<(VectorId, f32)> {
         let raw_v = self.comparator.lookup_abstract(v);
-        let quantized = self.quantizer.quantize(raw_v);
+        let quantized = self.quantizer.quantize(&*raw_v);
         let result = self.hnsw.search(
             AbstractVector::Unstored(&quantized),
             number_of_candidates,
@@ -190,27 +190,61 @@ mod tests {
             / 2.0
     }
 
-    use std::sync::{Arc, Mutex};
+    use std::{
+        ops::Deref,
+        sync::{Arc, Mutex, RwLock, RwLockReadGuard},
+    };
 
-    use crate::Comparator;
+    use crate::{Comparator, VectorId};
 
     use super::VectorStore;
 
+    enum LockOrRef<'a, T> {
+        Lock(RwLockReadGuard<'a, T>),
+        Borrow(&'a T),
+    }
+
+    impl<'a, T> Deref for LockOrRef<'a, T> {
+        type Target = T;
+
+        fn deref(&self) -> &Self::Target {
+            match self {
+                LockOrRef::Lock(l) => l,
+                LockOrRef::Borrow(b) => b,
+            }
+        }
+    }
+
     #[derive(Clone)]
     struct CentroidComparator32 {
-        data: Arc<Vec<[f32; 32]>>,
+        data: Arc<Vec<RwLock<[f32; 32]>>>,
     }
     impl Comparator for CentroidComparator32 {
         type Params = ();
 
         type T = [f32; 32];
-
-        fn lookup(&self, v: crate::VectorId) -> &Self::T {
-            &self.data[v.0]
+        type Borrowable<'a> = RwLockReadGuard<'a, Self::T>;
+        fn lookup(&self, v: crate::VectorId) -> Self::Borrowable<'_> {
+            self.data[v.0].read().unwrap()
         }
 
         fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
             cosine32(v1, v2)
+        }
+    }
+
+    impl VectorStore for CentroidComparator32 {
+        type T = <CentroidComparator32 as Comparator>::T;
+
+        fn store(&self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
+            let data = self.data;
+            let vid = data.len();
+            let mut vectors: Vec<VectorId> = Vec::new();
+            data.extend(i.enumerate().map(|(i, v)| {
+                vectors.push(VectorId(vid + i));
+                RwLock::new(v)
+            }));
+            vectors
         }
     }
 

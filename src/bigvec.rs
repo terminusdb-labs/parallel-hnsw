@@ -45,6 +45,7 @@ pub struct BigComparator {
 impl Comparator for BigComparator {
     type Params = ();
     type T = BigVec;
+    type Borrowable<'a> = &'a BigVec;
     fn compare_raw(&self, v1: &BigVec, v2: &BigVec) -> f32 {
         let mut result = 0.0;
         for (&f1, &f2) in v1.iter().zip(v2.iter()) {

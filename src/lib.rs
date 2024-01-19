@@ -10,6 +10,7 @@ pub use types::*;
 
 use std::{
     collections::{HashMap, HashSet},
+    ops::Deref,
     path::Path,
     slice::Iter,
     sync::{
@@ -26,14 +27,20 @@ use std::fmt::Debug;
 
 use crate::priority_queue::PriorityQueue;
 
+
+
 pub trait Comparator: Sync + Clone {
     type Params;
     type T: ?Sized;
-    fn lookup(&self, v: VectorId) -> &Self::T;
+    type Borrowable<'a>: Deref;
+
+    where
+        Self: 'a;
+    fn lookup(&self, v: VectorId) -> Self::Borrowable<'_>;
     fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32;
-    fn lookup_abstract<'a: 'b, 'b>(&'a self, v: AbstractVector<'b, Self::T>) -> &'b Self::T {
+    fn lookup_abstract<'a: 'b, 'b>(&'a self, v: AbstractVector<'b, Self::T>) -> Self::Borrowable<'b> {
         match v {
-            AbstractVector::Stored(i) => self.lookup(i),
+            AbstractVector::Stored(i) => &*self.lookup(i),
             AbstractVector::Unstored(v) => v,
         }
     }
