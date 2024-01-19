@@ -27,7 +27,7 @@ use std::fmt::Debug;
 
 use crate::priority_queue::PriorityQueue;
 
-enum WrappedBorrowable<'a, T: ?Sized, Borrowable: Deref<Target = T> + 'a> {
+pub enum WrappedBorrowable<'a, T: ?Sized, Borrowable: Deref<Target = T> + 'a> {
     Left(Borrowable),
     Right(&'a T),
 }
@@ -46,7 +46,6 @@ impl<'a, T: ?Sized, Borrowable: Deref<Target = T> + 'a> Deref
 }
 
 pub trait Comparator: Sync + Clone {
-    type Params;
     type T: ?Sized;
     type Borrowable<'a>: Deref<Target = Self::T>
     where
@@ -67,17 +66,15 @@ pub trait Comparator: Sync + Clone {
         let v2 = self.lookup_abstract(v2);
         self.compare_raw(&*v1, &*v2)
     }
+}
 
-    fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
-        panic!("Unable to serialize");
-    }
-
+pub trait Serializable: Sized {
+    type Params;
+    fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError>;
     fn deserialize<P: AsRef<Path>>(
         path: P,
         params: Self::Params,
-    ) -> Result<Self, SerializationError> {
-        panic!("Unable to deserialize");
-    }
+    ) -> Result<Self, SerializationError>;
 }
 
 #[derive(PartialEq, PartialOrd, Debug)]
@@ -820,23 +817,6 @@ impl<C: Comparator + 'static> Hnsw<C> {
         hnsw
     }
 
-    pub fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
-        serialize::serialize_hnsw(
-            self.neighborhood_size,
-            self.zero_layer_neighborhood_size,
-            self.order,
-            &self.layers,
-            path,
-        )
-    }
-
-    pub fn deserialize<P: AsRef<Path>>(
-        path: P,
-        params: C::Params,
-    ) -> Result<Option<Self>, SerializationError> {
-        serialize::deserialize_hnsw(path, params)
-    }
-
     pub fn all_vectors(&self) -> AllVectorIterator {
         self.get_layer(0)
             .map(|layer| {
@@ -1182,6 +1162,25 @@ impl<C: Comparator + 'static> Hnsw<C> {
     }
 }
 
+impl<C: Comparator + Serializable> Hnsw<C> {
+    pub fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
+        serialize::serialize_hnsw(
+            self.neighborhood_size,
+            self.zero_layer_neighborhood_size,
+            self.order,
+            &self.layers,
+            path,
+        )
+    }
+
+    pub fn deserialize<P: AsRef<Path>>(
+        path: P,
+        params: C::Params,
+    ) -> Result<Option<Self>, SerializationError> {
+        serialize::deserialize_hnsw(path, params)
+    }
+}
+
 fn cross_compare_vectors<C: Comparator + 'static>(
     vecs: &Vec<VectorId>,
     borrowed_comparator: &C,
@@ -1375,26 +1374,22 @@ mod tests {
     struct SillyComparator {
         data: Vec<SillyVec>,
     }
-    struct SillyVecMetric;
-    impl Metric<[f32; 3]> for SillyVecMetric {
-        fn compare_vec(f1: &[f32], f2: &[f32]) -> f32 {
-            let mut result = 0.0;
-            for (&f1, &f2) in v1.iter().zip(v2.iter()) {
-                result += f1 * f2
-            }
-            (1.0_f32 - result) / 2.0_f32
-        }
-    }
 
     impl Comparator<SillyVec> for SillyComparator {
         type Params = ();
-        type M = SillVecMetric;
-        fn lookup(&self, v: VectorId) -> &SillyVec {
-            &self.data[i.0]
+
+        type T = SillyVec;
+
+        type Borrowable<'a> = &'a Self::T;
+
+        fn lookup(&self, v: VectorId) -> Self::Borrowable<'_> {}
+
+        fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
+            todo!()
         }
     }
 
-    fn make_simple_hnsw() -> Hnsw<SillyComparator, SillyVec> {
+    fn make_simple_hnsw() -> Hnsw<SillyComparator> {
         let sqrt2_recip = std::f32::consts::FRAC_1_SQRT_2;
         let data: Vec<SillyVec> = vec![
             [1.0, 0.0, 0.0],                 // 0

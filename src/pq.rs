@@ -3,8 +3,7 @@ use linfa::traits::Fit;
 use linfa::DatasetBase;
 use linfa_clustering::KMeans;
 use ndarray::Array;
-use rand::{rngs::StdRng, Rng, SeedableRng};
-use std::sync::Arc;
+use rand::{rngs::StdRng, SeedableRng};
 
 trait Quantizer<const SIZE: usize, const QUANTIZED_SIZE: usize> {
     fn quantize(&self, vec: &[f32; SIZE]) -> [u16; QUANTIZED_SIZE];
@@ -62,13 +61,13 @@ pub struct QuantizedHnsw<
     comparator: FullComparator,
 }
 
-trait VectorSelector {
+pub trait VectorSelector {
     type T;
     fn selection(&self, size: usize) -> Vec<Self::T>;
     fn vector_chunks(&self) -> impl Iterator<Item = Vec<Self::T>>;
 }
 
-trait VectorStore {
+pub trait VectorStore {
     type T;
     fn store(&self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId>;
 }
@@ -192,28 +191,12 @@ mod tests {
 
     use std::{
         ops::Deref,
-        sync::{Arc, Mutex, RwLock, RwLockReadGuard},
+        sync::{Arc, RwLock, RwLockReadGuard},
     };
 
     use crate::{Comparator, VectorId};
 
     use super::VectorStore;
-
-    enum LockOrRef<'a, T> {
-        Lock(RwLockReadGuard<'a, T>),
-        Borrow(&'a T),
-    }
-
-    impl<'a, T> Deref for LockOrRef<'a, T> {
-        type Target = T;
-
-        fn deref(&self) -> &Self::Target {
-            match self {
-                LockOrRef::Lock(l) => l,
-                LockOrRef::Borrow(b) => b,
-            }
-        }
-    }
 
     struct ReadLockedVec<'a> {
         lock: RwLockReadGuard<'a, Vec<[f32; 32]>>,
@@ -233,8 +216,6 @@ mod tests {
         data: Arc<RwLock<Vec<[f32; 32]>>>,
     }
     impl Comparator for CentroidComparator32 {
-        type Params = ();
-
         type T = [f32; 32];
         type Borrowable<'a> = ReadLockedVec<'a>;
         fn lookup(&self, v: crate::VectorId) -> Self::Borrowable<'_> {

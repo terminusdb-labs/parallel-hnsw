@@ -1,9 +1,6 @@
-use std::{path::Path, sync::Arc};
+use std::sync::Arc;
 
-use crate::{
-    types::{AbstractVector, VectorId},
-    Comparator, Hnsw, SerializationError,
-};
+use crate::{types::VectorId, Comparator, Hnsw};
 
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use rand_distr::Uniform;
@@ -43,7 +40,6 @@ pub struct BigComparator {
 }
 
 impl Comparator for BigComparator {
-    type Params = ();
     type T = BigVec;
     type Borrowable<'a> = &'a BigVec;
     fn compare_raw(&self, v1: &BigVec, v2: &BigVec) -> f32 {

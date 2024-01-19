@@ -1,12 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
-use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::{mem, slice};
 use thiserror::Error;
 
-use crate::{Comparator, Hnsw, Layer, NodeId, VectorId};
+use crate::{Comparator, Hnsw, Layer, NodeId, Serializable, VectorId};
 
 #[derive(Error, Debug)]
 pub enum SerializationError {
@@ -30,7 +29,7 @@ pub struct HNSWMeta {
     pub order: usize,
 }
 
-pub fn serialize_hnsw<C: Comparator, P: AsRef<Path>>(
+pub fn serialize_hnsw<C: Comparator + Serializable, P: AsRef<Path>>(
     neighborhood_size: usize,
     zero_layer_neighborhood_size: usize,
     order: usize,
@@ -123,7 +122,7 @@ pub fn serialize_hnsw<C: Comparator, P: AsRef<Path>>(
     Ok(())
 }
 
-pub fn deserialize_hnsw<C: Comparator, P: AsRef<Path>>(
+pub fn deserialize_hnsw<C: Comparator + Serializable, P: AsRef<Path>>(
     path: P,
     params: C::Params,
 ) -> Result<Option<Hnsw<C>>, SerializationError> {
@@ -144,7 +143,7 @@ pub fn deserialize_hnsw<C: Comparator, P: AsRef<Path>>(
 
     // If we don't have a comparator, the HNSW is empty
     if hnsw_comparator_path.exists() {
-        let comparator: C = Comparator::deserialize(&hnsw_comparator_path, params)?;
+        let comparator: C = C::deserialize(&hnsw_comparator_path, params)?;
         let mut layers = Vec::with_capacity(layer_count);
         for i in 0..layer_count {
             let layer_number = layer_count - i - 1;

@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::sync::Arc;
 
 use linfa::traits::Fit;
@@ -6,7 +5,6 @@ use linfa::DatasetBase;
 use linfa_clustering::KMeans;
 use ndarray::Array;
 use parallel_hnsw::bigvec::{BigComparator, BigVec};
-use parallel_hnsw::serialize::SerializationError;
 use parallel_hnsw::{AbstractVector, Comparator, Hnsw, VectorId};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use rand_distr::Uniform;
@@ -56,9 +54,10 @@ impl CentroidComparator {
         vec
     }
 }
+
 impl Comparator for CentroidComparator {
-    type Params = ();
     type T = QuantizedVec;
+    type Borrowable<'a> = &'a Self::T;
     fn lookup(&self, v: VectorId) -> &QuantizedVec {
         &self.data[v.0]
     }

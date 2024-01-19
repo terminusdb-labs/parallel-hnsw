@@ -1,6 +1,4 @@
-use parallel_hnsw::{
-    serialize::SerializationError, AbstractVector, Comparator, Hnsw, OrderedFloat, VectorId,
-};
+use parallel_hnsw::{AbstractVector, Comparator, Hnsw, OrderedFloat, VectorId};
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 use rand_distr::Uniform;
 use rayon::prelude::*;
@@ -11,9 +9,10 @@ impl ScalarComparator {}
 struct ScalarComparator {
     data: Vec<f32>,
 }
+
 impl Comparator for ScalarComparator {
-    type Params = ();
     type T = f32;
+    type Borrowable<'a> = &'a Self::T;
     fn lookup(&self, vec: VectorId) -> &f32 {
         &self.data[vec.0]
     }

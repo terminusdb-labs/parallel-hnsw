@@ -1,4 +1,4 @@
-use parallel_hnsw::bigvec::{make_random_hnsw, BigComparator, BigVec};
+use parallel_hnsw::bigvec::{make_random_hnsw, BigComparator};
 use std::time::Instant;
 
 use parallel_hnsw::{AbstractVector, Hnsw, VectorId};
