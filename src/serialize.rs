@@ -1,12 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
-use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::{mem, slice};
 use thiserror::Error;
 
-use crate::{Comparator, Hnsw, Layer, NodeId, VectorId};
+use crate::{Comparator, Hnsw, Layer, NodeId, Serializable, VectorId};
 
 #[derive(Error, Debug)]
 pub enum SerializationError {
@@ -30,11 +29,11 @@ pub struct HNSWMeta {
     pub order: usize,
 }
 
-pub fn serialize_hnsw<T, C: Comparator<T>, P: AsRef<Path>>(
+pub fn serialize_hnsw<C: Comparator + Serializable, P: AsRef<Path>>(
     neighborhood_size: usize,
     zero_layer_neighborhood_size: usize,
     order: usize,
-    layers: &[Layer<C, T>],
+    layers: &[Layer<C>],
     path: P,
 ) -> Result<(), SerializationError> {
     let layer_count = layers.len();
@@ -65,8 +64,7 @@ pub fn serialize_hnsw<T, C: Comparator<T>, P: AsRef<Path>>(
         layers[0].comparator.serialize(hnsw_comparator)?;
     }
 
-    for i in 0..layer_count {
-        let layer = &layers[i];
+    for (i, layer) in layers.iter().enumerate().take(layer_count) {
         let layer_number = layer_count - i - 1;
 
         // Write meta data
@@ -123,10 +121,10 @@ pub fn serialize_hnsw<T, C: Comparator<T>, P: AsRef<Path>>(
     Ok(())
 }
 
-pub fn deserialize_hnsw<T: Sync, C: Comparator<T>, P: AsRef<Path>>(
+pub fn deserialize_hnsw<C: Comparator + Serializable, P: AsRef<Path>>(
     path: P,
     params: C::Params,
-) -> Result<Option<Hnsw<C, T>>, SerializationError> {
+) -> Result<Option<Hnsw<C>>, SerializationError> {
     let mut hnsw_meta: PathBuf = path.as_ref().into();
     hnsw_meta.push("meta");
     let mut hnsw_meta_file = OpenOptions::new().read(true).open(dbg!(hnsw_meta))?;
@@ -144,7 +142,7 @@ pub fn deserialize_hnsw<T: Sync, C: Comparator<T>, P: AsRef<Path>>(
 
     // If we don't have a comparator, the HNSW is empty
     if hnsw_comparator_path.exists() {
-        let comparator: C = Comparator::deserialize(&hnsw_comparator_path, params)?;
+        let comparator: C = C::deserialize(&hnsw_comparator_path, params)?;
         let mut layers = Vec::with_capacity(layer_count);
         for i in 0..layer_count {
             let layer_number = layer_count - i - 1;
@@ -200,7 +198,6 @@ pub fn deserialize_hnsw<T: Sync, C: Comparator<T>, P: AsRef<Path>>(
                 neighborhood_size,
                 neighbors,
                 nodes,
-                _phantom: PhantomData,
             });
         }
         Ok(Some(Hnsw {

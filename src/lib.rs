@@ -1,4 +1,5 @@
 pub mod bigvec;
+mod pq;
 mod priority_queue;
 mod search;
 pub mod serialize;
@@ -9,7 +10,7 @@ pub use types::*;
 
 use std::{
     collections::{HashMap, HashSet},
-    marker::PhantomData,
+    ops::Deref,
     path::Path,
     slice::Iter,
     sync::{
@@ -26,47 +27,86 @@ use std::fmt::Debug;
 
 use crate::priority_queue::PriorityQueue;
 
-pub trait Comparator<T>: Sync + Clone {
+pub enum WrappedBorrowable<'a, T: ?Sized, Borrowable: Deref<Target = T> + 'a> {
+    Left(Borrowable),
+    Right(&'a T),
+}
+
+impl<'a, T: ?Sized, Borrowable: Deref<Target = T> + 'a> Deref
+    for WrappedBorrowable<'a, T, Borrowable>
+{
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            WrappedBorrowable::Left(b) => b,
+            WrappedBorrowable::Right(b) => b,
+        }
+    }
+}
+
+pub trait Comparator: Sync + Clone {
+    type T: ?Sized;
+    type Borrowable<'a>: Deref<Target = Self::T>
+    where
+        Self: 'a;
+    fn lookup(&self, v: VectorId) -> Self::Borrowable<'_>;
+    fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32;
+    fn lookup_abstract<'a: 'b, 'b>(
+        &'a self,
+        v: AbstractVector<'b, Self::T>,
+    ) -> WrappedBorrowable<'b, Self::T, Self::Borrowable<'b>> {
+        match v {
+            AbstractVector::Stored(i) => WrappedBorrowable::Left(self.lookup(i)),
+            AbstractVector::Unstored(v) => WrappedBorrowable::Right(v),
+        }
+    }
+    fn compare_vec(&self, v1: AbstractVector<Self::T>, v2: AbstractVector<Self::T>) -> f32 {
+        let v1 = self.lookup_abstract(v1);
+        let v2 = self.lookup_abstract(v2);
+        self.compare_raw(&*v1, &*v2)
+    }
+}
+
+pub trait Serializable: Sized {
     type Params;
-    fn compare_vec(&self, v1: AbstractVector<T>, v2: AbstractVector<T>) -> f32;
     fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError>;
     fn deserialize<P: AsRef<Path>>(
         path: P,
         params: Self::Params,
     ) -> Result<Self, SerializationError>;
 }
+
 #[derive(PartialEq, PartialOrd, Debug)]
-pub struct Layer<C: Comparator<T>, T> {
+pub struct Layer<C: Comparator> {
     pub comparator: C,
     pub neighborhood_size: usize,
     pub nodes: Vec<VectorId>,
     pub neighbors: Vec<NodeId>,
-    _phantom: PhantomData<T>,
 }
 
-impl<C: Comparator<T>, T> Clone for Layer<C, T> {
+impl<C: Comparator> Clone for Layer<C> {
     fn clone(&self) -> Self {
         Self {
             comparator: self.comparator.clone(),
             neighborhood_size: self.neighborhood_size,
             nodes: self.nodes.clone(),
             neighbors: self.neighbors.clone(),
-            _phantom: PhantomData,
         }
     }
 }
 
-unsafe impl<C: Comparator<T>, T> Sync for Layer<C, T> {}
+unsafe impl<C: Comparator> Sync for Layer<C> {}
 
-impl<C: Comparator<T>, T> AsRef<Layer<C, T>> for Layer<C, T> {
-    fn as_ref(&self) -> &Layer<C, T> {
+impl<C: Comparator> AsRef<Layer<C>> for Layer<C> {
+    fn as_ref(&self) -> &Layer<C> {
         self
     }
 }
 
 type NodeDistances = Vec<(NodeId, f32)>;
 
-impl<C: Comparator<T>, T> Layer<C, T> {
+impl<C: Comparator> Layer<C> {
     #[allow(unused)]
     pub fn get_node(&self, v: VectorId) -> Option<NodeId> {
         self.nodes.binary_search(&v).ok().map(NodeId)
@@ -102,7 +142,7 @@ impl<C: Comparator<T>, T> Layer<C, T> {
 
     pub fn closest_nodes(
         &self,
-        v: AbstractVector<T>,
+        v: AbstractVector<C::T>,
         candidates: &mut PriorityQueue<NodeId>,
         mut probe_depth: usize,
     ) -> usize {
@@ -176,7 +216,7 @@ impl<C: Comparator<T>, T> Layer<C, T> {
 
     pub fn closest_vectors(
         &self,
-        v: AbstractVector<T>,
+        v: AbstractVector<C::T>,
         candidates: &PriorityQueue<VectorId>,
         candidate_count: usize,
         probe_depth: usize,
@@ -515,23 +555,23 @@ impl NodeDistance {
 }
 
 #[derive(PartialEq, PartialOrd, Debug)]
-pub struct Hnsw<C: Comparator<T>, T: Sync> {
-    pub layers: Vec<Layer<C, T>>,
+pub struct Hnsw<C: Comparator> {
+    pub layers: Vec<Layer<C>>,
     order: usize,
     neighborhood_size: usize,
     zero_layer_neighborhood_size: usize,
 }
 
-impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
+impl<C: Comparator + 'static> Hnsw<C> {
     pub fn vector_count(&self) -> usize {
         self.get_layer(0).map(|l| l.node_count()).unwrap_or(0)
     }
 
-    pub fn get_layer(&self, i: usize) -> Option<&Layer<C, T>> {
+    pub fn get_layer(&self, i: usize) -> Option<&Layer<C>> {
         self.get_layer_from_top(self.layers.len() - i - 1)
     }
 
-    pub fn get_layer_from_top_mut(&mut self, i: usize) -> Option<&mut Layer<C, T>> {
+    pub fn get_layer_from_top_mut(&mut self, i: usize) -> Option<&mut Layer<C>> {
         if i < self.layer_count() {
             Some(&mut self.layers[i])
         } else {
@@ -540,7 +580,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         }
     }
 
-    pub fn get_layer_from_top(&self, i: usize) -> Option<&Layer<C, T>> {
+    pub fn get_layer_from_top(&self, i: usize) -> Option<&Layer<C>> {
         if i < self.layer_count() {
             Some(&self.layers[i])
         } else {
@@ -549,7 +589,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         }
     }
 
-    pub fn get_layer_above(&self, i: usize) -> Option<&Layer<C, T>> {
+    pub fn get_layer_above(&self, i: usize) -> Option<&Layer<C>> {
         if i == 0 {
             None
         } else {
@@ -572,7 +612,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
 
     pub fn search(
         &self,
-        v: AbstractVector<T>,
+        v: AbstractVector<C::T>,
         number_of_candidates: usize,
         probe_depth: usize,
     ) -> Vec<(VectorId, f32)> {
@@ -581,7 +621,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
 
     pub fn search_noisy(
         &self,
-        v: AbstractVector<T>,
+        v: AbstractVector<C::T>,
         number_of_candidates: usize,
         probe_depth: usize,
         noisy: bool,
@@ -595,7 +635,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         vs: Vec<VectorId>,
         neighborhood_size: usize,
         new_top: bool,
-    ) -> Layer<C, T> {
+    ) -> Layer<C> {
         assert!(!vs.is_empty(), "tried to construct an empty layer");
         // Parameter for the number of neighbours to look at from the proceeding layer.
         let number_of_supers_to_check = 6; //neighborhood_size;
@@ -612,7 +652,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         // we should *really* consider succinct data structures
         eprintln!("Finding partition groups");
         // 1. Calculate our node id, and find our neighborhood in the above layer
-        let layers: &[Layer<_, _>] = if new_top { &[] } else { &self.layers };
+        let layers: &[Layer<_>] = if new_top { &[] } else { &self.layers };
         let initial_partitions = search::generate_initial_partitions(
             &vs,
             &comparator,
@@ -734,7 +774,6 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             comparator,
             nodes: vs,
             neighbors,
-            _phantom: PhantomData,
         }
     }
 
@@ -754,7 +793,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         assert!(!partitions.is_empty());
         let layer_count = partitions.len();
         let layers = Vec::with_capacity(layer_count);
-        let mut hnsw: Hnsw<C, T> = Hnsw {
+        let mut hnsw: Hnsw<C> = Hnsw {
             layers,
             neighborhood_size,
             zero_layer_neighborhood_size,
@@ -776,23 +815,6 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         }
 
         hnsw
-    }
-
-    pub fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
-        serialize::serialize_hnsw(
-            self.neighborhood_size,
-            self.zero_layer_neighborhood_size,
-            self.order,
-            &self.layers,
-            path,
-        )
-    }
-
-    pub fn deserialize<P: AsRef<Path>>(
-        path: P,
-        params: C::Params,
-    ) -> Result<Option<Self>, SerializationError> {
-        serialize::deserialize_hnsw(path, params)
     }
 
     pub fn all_vectors(&self) -> AllVectorIterator {
@@ -885,7 +907,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
             layers_above.len(),
             layers_below.len()
         );
-        let layers_above: &[Layer<C, T>] = layers_above;
+        let layers_above: &[Layer<C>] = layers_above;
         let layer = &mut layers_below[0];
 
         let (old_nodes, old_nodes_map, new_nodes_map, vecs) = generate_node_maps(vecs, layer);
@@ -905,14 +927,13 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         let borrowed_comparator = &layer.comparator;
         let cross_compare = cross_compare_vectors(&vecs, borrowed_comparator);
 
-        let mut pseudo_layers: Vec<&Layer<_, _>> = Vec::new();
+        let mut pseudo_layers: Vec<&Layer<_>> = Vec::new();
         pseudo_layers.extend(layers_above.iter());
         let pseudo_layer = Layer {
             comparator: layer.comparator.clone(),
             neighborhood_size: layer.neighborhood_size,
             nodes: old_nodes,
             neighbors: old_neighbors,
-            _phantom: PhantomData,
         };
         pseudo_layers.push(&pseudo_layer);
         eprintln!("Finding neighborhoods");
@@ -1010,7 +1031,7 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
         let current_layer = &mut bottom_stack[0];
 
         let pseudo_layer = current_layer.clone();
-        let mut pseudo_stack: Vec<&Layer<C, T>> = Vec::with_capacity(top_stack.len() + 1);
+        let mut pseudo_stack: Vec<&Layer<C>> = Vec::with_capacity(top_stack.len() + 1);
         pseudo_stack.extend(top_stack.iter());
         pseudo_stack.push(&pseudo_layer);
 
@@ -1141,7 +1162,26 @@ impl<C: Comparator<T> + 'static, T: Sync + 'static> Hnsw<C, T> {
     }
 }
 
-fn cross_compare_vectors<C: Comparator<T> + 'static, T: Sync + 'static>(
+impl<C: Comparator + Serializable> Hnsw<C> {
+    pub fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
+        serialize::serialize_hnsw(
+            self.neighborhood_size,
+            self.zero_layer_neighborhood_size,
+            self.order,
+            &self.layers,
+            path,
+        )
+    }
+
+    pub fn deserialize<P: AsRef<Path>>(
+        path: P,
+        params: C::Params,
+    ) -> Result<Option<Self>, SerializationError> {
+        serialize::deserialize_hnsw(path, params)
+    }
+}
+
+fn cross_compare_vectors<C: Comparator + 'static>(
     vecs: &Vec<VectorId>,
     borrowed_comparator: &C,
 ) -> HashMap<VectorId, Vec<(VectorId, f32)>> {
@@ -1166,11 +1206,11 @@ fn cross_compare_vectors<C: Comparator<T> + 'static, T: Sync + 'static>(
     cross_compare
 }
 
-fn copy_old_neighbhoods_into_layer<C: Comparator<T> + 'static, T: Sync + 'static>(
+fn copy_old_neighbhoods_into_layer<C: Comparator + 'static>(
     old_nodes: &[VectorId],
     old_neighbors: &[NodeId],
     old_nodes_map: &[usize],
-    layer: &mut Layer<C, T>,
+    layer: &mut Layer<C>,
 ) {
     // insert old nodes with shifted offsets
     (0..old_nodes.len())
@@ -1196,9 +1236,9 @@ fn copy_old_neighbhoods_into_layer<C: Comparator<T> + 'static, T: Sync + 'static
         });
 }
 
-fn generate_node_maps<C: Comparator<T> + 'static, T: Sync + 'static>(
+fn generate_node_maps<C: Comparator + 'static>(
     mut vecs: Vec<VectorId>,
-    layer: &mut Layer<C, T>,
+    layer: &mut Layer<C>,
 ) -> (Vec<VectorId>, Vec<usize>, Vec<usize>, Vec<VectorId>) {
     vecs.sort();
     // this will be swapped out for the current nodes, therefore the variable name
@@ -1335,37 +1375,24 @@ mod tests {
         data: Vec<SillyVec>,
     }
 
-    impl Comparator<SillyVec> for SillyComparator {
-        type Params = ();
-        fn compare_vec(&self, v1: AbstractVector<SillyVec>, v2: AbstractVector<SillyVec>) -> f32 {
-            let v1 = match v1 {
-                AbstractVector::Stored(i) => &self.data[i.0],
-                AbstractVector::Unstored(v) => v,
-            };
-            let v2 = match v2 {
-                AbstractVector::Stored(i) => &self.data[i.0],
-                AbstractVector::Unstored(v) => v,
-            };
+    impl Comparator for SillyComparator {
+        type T = SillyVec;
+        type Borrowable<'a> = &'a SillyVec;
+
+        fn lookup(&self, v: VectorId) -> Self::Borrowable<'_> {
+            &self.data[v.0]
+        }
+
+        fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
             let mut result = 0.0;
             for (&f1, &f2) in v1.iter().zip(v2.iter()) {
                 result += f1 * f2
             }
             1.0 - result
         }
-
-        fn serialize<P: AsRef<Path>>(&self, _path: P) -> Result<(), SerializationError> {
-            Ok(())
-        }
-
-        fn deserialize<P: AsRef<Path>>(
-            _path: P,
-            _: (),
-        ) -> Result<SillyComparator, SerializationError> {
-            Ok(SillyComparator { data: Vec::new() })
-        }
     }
 
-    fn make_simple_hnsw() -> Hnsw<SillyComparator, SillyVec> {
+    fn make_simple_hnsw() -> Hnsw<SillyComparator> {
         let sqrt2_recip = std::f32::consts::FRAC_1_SQRT_2;
         let data: Vec<SillyVec> = vec![
             [1.0, 0.0, 0.0],                 // 0
@@ -1381,11 +1408,11 @@ mod tests {
         let c = SillyComparator { data: data.clone() };
         let vs: Vec<_> = (0..9).map(VectorId).collect();
 
-        let hnsw: Hnsw<SillyComparator, SillyVec> = Hnsw::generate(c, vs, 3, 6, 6);
+        let hnsw: Hnsw<SillyComparator> = Hnsw::generate(c, vs, 3, 6, 6);
         hnsw
     }
 
-    fn make_broken_hnsw() -> Hnsw<SillyComparator, SillyVec> {
+    fn make_broken_hnsw() -> Hnsw<SillyComparator> {
         let sqrt2_recip = std::f32::consts::FRAC_1_SQRT_2;
         let data: Vec<SillyVec> = vec![
             [1.0, 0.0, 0.0],                 // 0
@@ -1402,7 +1429,7 @@ mod tests {
         let c = SillyComparator { data: data.clone() };
         let vs: Vec<_> = (0..9).map(VectorId).collect(); // only index 8 first..
 
-        let mut hnsw: Hnsw<SillyComparator, SillyVec> = Hnsw::generate(c, vs, 3, 6, 6);
+        let mut hnsw: Hnsw<SillyComparator> = Hnsw::generate(c, vs, 3, 6, 6);
         let bottom = &mut hnsw.layers[1];
         // add a ninth disconnected vector
         bottom.nodes.push(VectorId(9));
@@ -1412,7 +1439,7 @@ mod tests {
 
     #[test]
     fn test_nearness_search() {
-        let hnsw: Hnsw<SillyComparator, SillyVec> = make_simple_hnsw();
+        let hnsw: Hnsw<SillyComparator> = make_simple_hnsw();
         let sqrt2_recip = std::f32::consts::FRAC_1_SQRT_2;
         let slice = &[0.0, sqrt2_recip, sqrt2_recip];
         let search_vector = AbstractVector::Unstored(slice);
@@ -1435,7 +1462,7 @@ mod tests {
 
     #[test]
     fn test_generation() {
-        let hnsw: Hnsw<SillyComparator, SillyVec> = make_simple_hnsw();
+        let hnsw: Hnsw<SillyComparator> = make_simple_hnsw();
         assert_eq!(
             hnsw.get_layer(0).map(|layer| &layer.nodes),
             Some(
@@ -1519,7 +1546,7 @@ mod tests {
 
     #[test]
     fn test_search() {
-        let hnsw: Hnsw<SillyComparator, SillyVec> = make_simple_hnsw();
+        let hnsw: Hnsw<SillyComparator> = make_simple_hnsw();
         let data = &hnsw.layers[0].comparator.data;
         for (i, datum) in data.iter().enumerate() {
             let v = AbstractVector::Unstored(datum);
@@ -1529,7 +1556,7 @@ mod tests {
         }
     }
 
-    fn do_test_recall(hnsw: &Hnsw<BigComparator, BigVec>, minimum_recall: f32) -> f32 {
+    fn do_test_recall(hnsw: &Hnsw<BigComparator>, minimum_recall: f32) -> f32 {
         let data = &hnsw.layers[0].comparator.data;
         let total = data.len();
         let total_relevant: usize = data
@@ -1561,7 +1588,7 @@ mod tests {
     fn test_supers() {
         let size = 10000;
         let dimension = 10;
-        let hnsw: Hnsw<BigComparator, BigVec> = bigvec::make_random_hnsw(size, dimension);
+        let hnsw: Hnsw<BigComparator> = bigvec::make_random_hnsw(size, dimension);
         //eprintln!("Top neighbors: {:?}", hnsw.layers[0].neighbors);
         let supers_1 = hnsw.supers_for_layer(0);
         let supers_2 = hnsw.supers_for_layer(0);
@@ -1582,9 +1609,9 @@ mod tests {
 
     #[test]
     fn test_recall() {
-        let size = 1_000_0;
+        let size = 10_000;
         let dimension = 1536;
-        let mut hnsw: Hnsw<BigComparator, BigVec> = bigvec::make_random_hnsw(size, dimension);
+        let mut hnsw: Hnsw<BigComparator> = bigvec::make_random_hnsw(size, dimension);
         do_test_recall(&hnsw, 0.0);
         let mut improvement_count = 0;
         let mut last_recall = 0.0;
@@ -1604,7 +1631,7 @@ mod tests {
 
     #[test]
     fn test_small_index_improvement() {
-        let mut hnsw: Hnsw<SillyComparator, SillyVec> = make_simple_hnsw();
+        let mut hnsw: Hnsw<SillyComparator> = make_simple_hnsw();
         eprintln!("One from bottom: {:?}", hnsw.layers[hnsw.layer_count() - 2]);
         hnsw.improve_index();
         eprintln!(
@@ -1621,7 +1648,7 @@ mod tests {
 
     #[test]
     fn test_tiny_index_improvement() {
-        let mut hnsw: Hnsw<SillyComparator, SillyVec> = make_broken_hnsw();
+        let mut hnsw: Hnsw<SillyComparator> = make_broken_hnsw();
         hnsw.improve_index();
         let data = &hnsw.layers[hnsw.layer_count() - 1].comparator.data;
         for (i, datum) in data.iter().enumerate() {
@@ -1646,7 +1673,7 @@ mod tests {
         let mut best_order = usize::MAX;
         let mut best_hnsw = None;
         for order in orders {
-            let hnsw: Hnsw<BigComparator, BigVec> =
+            let hnsw: Hnsw<BigComparator> =
                 bigvec::make_random_hnsw_with_order(size, dimension, order);
             let recall = do_test_recall(&hnsw, 0.0);
             if recall > best {

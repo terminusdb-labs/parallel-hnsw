@@ -15,10 +15,10 @@ struct Cmd {
 }
 
 use parallel_hnsw::{
-    bigvec::{make_random_hnsw_with_order, BigComparator, BigVec},
+    bigvec::{make_random_hnsw_with_order, BigComparator},
     AbstractVector, Hnsw, VectorId,
 };
-fn do_test_recall(hnsw: &Hnsw<BigComparator, BigVec>) -> f32 {
+fn do_test_recall(hnsw: &Hnsw<BigComparator>) -> f32 {
     let data = &hnsw.layers[0].comparator.data;
     let total = data.len();
     let total_relevant: usize = data

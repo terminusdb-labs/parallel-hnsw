@@ -1,48 +1,28 @@
-use parallel_hnsw::{
-    serialize::SerializationError, AbstractVector, Comparator, Hnsw, OrderedFloat, VectorId,
-};
+use parallel_hnsw::{AbstractVector, Comparator, Hnsw, OrderedFloat, VectorId};
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 use rand_distr::Uniform;
 use rayon::prelude::*;
+
+impl ScalarComparator {}
 
 #[derive(Clone)]
 struct ScalarComparator {
     data: Vec<f32>,
 }
 
-impl ScalarComparator {
-    fn value_for(&self, vec: AbstractVector<f32>) -> f32 {
-        match vec {
-            AbstractVector::Stored(i) => self.data[i.0],
-            AbstractVector::Unstored(v) => *v,
-        }
+impl Comparator for ScalarComparator {
+    type T = f32;
+    type Borrowable<'a> = &'a Self::T;
+    fn lookup(&self, vec: VectorId) -> &f32 {
+        &self.data[vec.0]
+    }
+
+    fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
+        v1 - v2
     }
 }
 
-impl Comparator<f32> for ScalarComparator {
-    type Params = ();
-
-    fn compare_vec(
-        &self,
-        v1: parallel_hnsw::AbstractVector<f32>,
-        v2: parallel_hnsw::AbstractVector<f32>,
-    ) -> f32 {
-        (self.value_for(v1) - self.value_for(v2)).abs()
-    }
-
-    fn serialize<P: AsRef<std::path::Path>>(&self, _path: P) -> Result<(), SerializationError> {
-        todo!()
-    }
-
-    fn deserialize<P: AsRef<std::path::Path>>(
-        _path: P,
-        _params: Self::Params,
-    ) -> Result<Self, SerializationError> {
-        todo!()
-    }
-}
-
-fn make_random_scalar_hnsw(count: usize) -> Hnsw<ScalarComparator, f32> {
+fn make_random_scalar_hnsw(count: usize) -> Hnsw<ScalarComparator> {
     let rng = StdRng::seed_from_u64(42);
     let range = Uniform::from(-10.0..10.0);
     let mut data: Vec<f32> = rng.sample_iter(&range).take(count).collect();
@@ -51,17 +31,16 @@ fn make_random_scalar_hnsw(count: usize) -> Hnsw<ScalarComparator, f32> {
     let mut rng = StdRng::seed_from_u64(42);
     data.shuffle(&mut rng);
     let count = data.len();
-
     let c = ScalarComparator { data };
     let vs: Vec<_> = (0..count).map(VectorId).collect();
     let m = 24;
     let m0 = 48;
     let order = 24;
-    let hnsw: Hnsw<ScalarComparator, f32> = Hnsw::generate(c, vs, m, m0, order);
+    let hnsw: Hnsw<ScalarComparator> = Hnsw::generate(c, vs, m, m0, order);
     hnsw
 }
 
-fn do_test_recall(hnsw: &Hnsw<ScalarComparator, f32>) -> Vec<usize> {
+fn do_test_recall(hnsw: &Hnsw<ScalarComparator>) -> Vec<usize> {
     let data = &hnsw.comparator().data;
     let _total = data.len();
     let unrecallable_vecs: Vec<_> = data

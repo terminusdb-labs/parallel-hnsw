@@ -1,9 +1,9 @@
-use parallel_hnsw::bigvec::{make_random_hnsw, BigComparator, BigVec};
+use parallel_hnsw::bigvec::{make_random_hnsw, BigComparator};
 use std::time::Instant;
 
 use parallel_hnsw::{AbstractVector, Hnsw, VectorId};
 use rayon::prelude::*;
-fn do_test_recall(hnsw: &Hnsw<BigComparator, BigVec>) -> usize {
+fn do_test_recall(hnsw: &Hnsw<BigComparator>) -> usize {
     let data = &hnsw.comparator().data;
     let _total = data.len();
     let total_relevant: usize = data
