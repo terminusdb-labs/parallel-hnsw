@@ -1375,17 +1375,20 @@ mod tests {
         data: Vec<SillyVec>,
     }
 
-    impl Comparator<SillyVec> for SillyComparator {
-        type Params = ();
-
+    impl Comparator for SillyComparator {
         type T = SillyVec;
+        type Borrowable<'a> = &'a SillyVec;
 
-        type Borrowable<'a> = &'a Self::T;
-
-        fn lookup(&self, v: VectorId) -> Self::Borrowable<'_> {}
+        fn lookup(&self, v: VectorId) -> Self::Borrowable<'_> {
+            &self.data[v.0]
+        }
 
         fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
-            todo!()
+            let mut result = 0.0;
+            for (&f1, &f2) in v1.iter().zip(v2.iter()) {
+                result += f1 * f2
+            }
+            1.0 - result
         }
     }
 
@@ -1405,11 +1408,11 @@ mod tests {
         let c = SillyComparator { data: data.clone() };
         let vs: Vec<_> = (0..9).map(VectorId).collect();
 
-        let hnsw: Hnsw<SillyComparator, SillyVec> = Hnsw::generate(c, vs, 3, 6, 6);
+        let hnsw: Hnsw<SillyComparator> = Hnsw::generate(c, vs, 3, 6, 6);
         hnsw
     }
 
-    fn make_broken_hnsw() -> Hnsw<SillyComparator, SillyVec> {
+    fn make_broken_hnsw() -> Hnsw<SillyComparator> {
         let sqrt2_recip = std::f32::consts::FRAC_1_SQRT_2;
         let data: Vec<SillyVec> = vec![
             [1.0, 0.0, 0.0],                 // 0
@@ -1426,7 +1429,7 @@ mod tests {
         let c = SillyComparator { data: data.clone() };
         let vs: Vec<_> = (0..9).map(VectorId).collect(); // only index 8 first..
 
-        let mut hnsw: Hnsw<SillyComparator, SillyVec> = Hnsw::generate(c, vs, 3, 6, 6);
+        let mut hnsw: Hnsw<SillyComparator> = Hnsw::generate(c, vs, 3, 6, 6);
         let bottom = &mut hnsw.layers[1];
         // add a ninth disconnected vector
         bottom.nodes.push(VectorId(9));
@@ -1436,7 +1439,7 @@ mod tests {
 
     #[test]
     fn test_nearness_search() {
-        let hnsw: Hnsw<SillyComparator, SillyVec> = make_simple_hnsw();
+        let hnsw: Hnsw<SillyComparator> = make_simple_hnsw();
         let sqrt2_recip = std::f32::consts::FRAC_1_SQRT_2;
         let slice = &[0.0, sqrt2_recip, sqrt2_recip];
         let search_vector = AbstractVector::Unstored(slice);
@@ -1459,7 +1462,7 @@ mod tests {
 
     #[test]
     fn test_generation() {
-        let hnsw: Hnsw<SillyComparator, SillyVec> = make_simple_hnsw();
+        let hnsw: Hnsw<SillyComparator> = make_simple_hnsw();
         assert_eq!(
             hnsw.get_layer(0).map(|layer| &layer.nodes),
             Some(
@@ -1543,7 +1546,7 @@ mod tests {
 
     #[test]
     fn test_search() {
-        let hnsw: Hnsw<SillyComparator, SillyVec> = make_simple_hnsw();
+        let hnsw: Hnsw<SillyComparator> = make_simple_hnsw();
         let data = &hnsw.layers[0].comparator.data;
         for (i, datum) in data.iter().enumerate() {
             let v = AbstractVector::Unstored(datum);
@@ -1553,7 +1556,7 @@ mod tests {
         }
     }
 
-    fn do_test_recall(hnsw: &Hnsw<BigComparator, BigVec>, minimum_recall: f32) -> f32 {
+    fn do_test_recall(hnsw: &Hnsw<BigComparator>, minimum_recall: f32) -> f32 {
         let data = &hnsw.layers[0].comparator.data;
         let total = data.len();
         let total_relevant: usize = data
@@ -1585,7 +1588,7 @@ mod tests {
     fn test_supers() {
         let size = 10000;
         let dimension = 10;
-        let hnsw: Hnsw<BigComparator, BigVec> = bigvec::make_random_hnsw(size, dimension);
+        let hnsw: Hnsw<BigComparator> = bigvec::make_random_hnsw(size, dimension);
         //eprintln!("Top neighbors: {:?}", hnsw.layers[0].neighbors);
         let supers_1 = hnsw.supers_for_layer(0);
         let supers_2 = hnsw.supers_for_layer(0);
@@ -1606,9 +1609,9 @@ mod tests {
 
     #[test]
     fn test_recall() {
-        let size = 1_000_0;
+        let size = 10_000;
         let dimension = 1536;
-        let mut hnsw: Hnsw<BigComparator, BigVec> = bigvec::make_random_hnsw(size, dimension);
+        let mut hnsw: Hnsw<BigComparator> = bigvec::make_random_hnsw(size, dimension);
         do_test_recall(&hnsw, 0.0);
         let mut improvement_count = 0;
         let mut last_recall = 0.0;
@@ -1628,7 +1631,7 @@ mod tests {
 
     #[test]
     fn test_small_index_improvement() {
-        let mut hnsw: Hnsw<SillyComparator, SillyVec> = make_simple_hnsw();
+        let mut hnsw: Hnsw<SillyComparator> = make_simple_hnsw();
         eprintln!("One from bottom: {:?}", hnsw.layers[hnsw.layer_count() - 2]);
         hnsw.improve_index();
         eprintln!(
@@ -1645,7 +1648,7 @@ mod tests {
 
     #[test]
     fn test_tiny_index_improvement() {
-        let mut hnsw: Hnsw<SillyComparator, SillyVec> = make_broken_hnsw();
+        let mut hnsw: Hnsw<SillyComparator> = make_broken_hnsw();
         hnsw.improve_index();
         let data = &hnsw.layers[hnsw.layer_count() - 1].comparator.data;
         for (i, datum) in data.iter().enumerate() {
@@ -1670,7 +1673,7 @@ mod tests {
         let mut best_order = usize::MAX;
         let mut best_hnsw = None;
         for order in orders {
-            let hnsw: Hnsw<BigComparator, BigVec> =
+            let hnsw: Hnsw<BigComparator> =
                 bigvec::make_random_hnsw_with_order(size, dimension, order);
             let recall = do_test_recall(&hnsw, 0.0);
             if recall > best {

@@ -11,7 +11,7 @@ use rand_distr::Uniform;
 use rayon::prelude::*;
 
 // assumes normalized vectors
-fn cosine(v1: &Vec<f32>, v2: &Vec<f32>) -> f32 {
+fn cosine(v1: &[f32], v2: &[f32]) -> f32 {
     (1.0 - v1
         .iter()
         .zip(v2.iter())
@@ -40,7 +40,7 @@ impl CentroidComparator {
         v
     }
 
-    fn quantize(&self, vin: &Vec<f32>) -> QuantizedVec {
+    fn quantize(&self, vin: &[f32]) -> QuantizedVec {
         let len = vin.len();
         let parts = len / self.centroid_size;
         assert_eq!(len % self.centroid_size, 0);

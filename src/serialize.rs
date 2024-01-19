@@ -64,8 +64,7 @@ pub fn serialize_hnsw<C: Comparator + Serializable, P: AsRef<Path>>(
         layers[0].comparator.serialize(hnsw_comparator)?;
     }
 
-    for i in 0..layer_count {
-        let layer = &layers[i];
+    for (i, layer) in layers.iter().enumerate().take(layer_count) {
         let layer_number = layer_count - i - 1;
 
         // Write meta data

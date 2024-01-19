@@ -167,7 +167,7 @@ impl<
         probe_depth: usize,
     ) -> Vec<(VectorId, f32)> {
         let raw_v = self.comparator.lookup_abstract(v);
-        let quantized = self.quantizer.quantize(&*raw_v);
+        let quantized = self.quantizer.quantize(&raw_v);
         let result = self.hnsw.search(
             AbstractVector::Unstored(&quantized),
             number_of_candidates,

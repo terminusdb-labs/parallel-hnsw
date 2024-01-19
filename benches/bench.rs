@@ -3,7 +3,7 @@ extern crate test;
 
 use std::sync::Arc;
 
-use parallel_hnsw::{AbstractVector, Comparator, Hnsw, VectorId};
+use parallel_hnsw::{Comparator, Hnsw, VectorId};
 use rand::{thread_rng, Rng};
 use test::Bencher;
 type SillyVec = [f32; 100];
@@ -12,34 +12,21 @@ struct SillyComparator {
     data: Arc<Vec<SillyVec>>,
 }
 
-impl Comparator<SillyVec> for SillyComparator {
-    type Params = ();
-    fn compare_vec(&self, v1: AbstractVector<SillyVec>, v2: AbstractVector<SillyVec>) -> f32 {
-        let v1 = match v1 {
-            AbstractVector::Stored(i) => &self.data[i.0],
-            AbstractVector::Unstored(v) => v,
-        };
-        let v2 = match v2 {
-            AbstractVector::Stored(i) => &self.data[i.0],
-            AbstractVector::Unstored(v) => v,
-        };
+impl Comparator for SillyComparator {
+    type T = SillyVec;
+
+    type Borrowable<'a> = &'a SillyVec;
+
+    fn lookup(&self, v: VectorId) -> Self::Borrowable<'_> {
+        &self.data[v.0]
+    }
+
+    fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
         let mut result = 0.0;
         for (&f1, &f2) in v1.iter().zip(v2.iter()) {
             result += f1 * f2
         }
         1.0 - result
-    }
-    fn deserialize<P: AsRef<std::path::Path>>(
-        _path: P,
-        _params: Self::Params,
-    ) -> Result<Self, parallel_hnsw::SerializationError> {
-        todo!();
-    }
-    fn serialize<P: AsRef<std::path::Path>>(
-        &self,
-        _path: P,
-    ) -> Result<(), parallel_hnsw::SerializationError> {
-        todo!();
     }
 }
 
@@ -71,6 +58,6 @@ fn bla(b: &mut Bencher) {
     let vs: Vec<VectorId> = (0..LENGTH).map(VectorId).collect();
 
     b.iter(|| {
-        let _result: Hnsw<_, _> = Hnsw::generate(comparator.clone(), vs.clone(), 24, 48);
+        let _result: Hnsw<_> = Hnsw::generate(comparator.clone(), vs.clone(), 24, 48, 2);
     });
 }
