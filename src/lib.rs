@@ -4,7 +4,7 @@ mod search;
 pub mod serialize;
 mod types;
 
-use serialize::SerializationError;
+pub use serialize::SerializationError;
 pub use types::*;
 
 use std::{
