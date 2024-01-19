@@ -58,6 +58,10 @@ impl<'a, Id: PartialOrd + PartialEq + Copy + EmptyValue> PriorityQueue<'a, Id> {
             .partition_point(|d| OrderedFloat(*d) != OrderedFloat(f32::MAX))
     }
 
+    pub fn capacity(&self) -> usize {
+        self.priorities.len()
+    }
+
     pub fn data(&'a self) -> &'a [Id] {
         &self.data
     }

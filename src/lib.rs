@@ -208,7 +208,8 @@ impl<C: Comparator> Layer<C> {
             //dbg!(&candidates.priorities);
 
             // Sort in reverse order
-            visit_queue.sort_by_key(|(n, distance, _)| (OrderedFloat(-*distance), *n))
+            visit_queue
+                .sort_by_key(|(n, distance, _)| (OrderedFloat(-*distance), (usize::MAX - n.0)))
         }
 
         highest_improvement
@@ -227,13 +228,15 @@ impl<C: Comparator> Layer<C> {
             .map(|(v, d)| (self.get_node(v).unwrap(), d))
             .collect();
         //eprintln!("pairs: {pairs:?}");
-        let mut queue = PriorityQueue::new(candidate_count);
+        let mut queue = PriorityQueue::new(candidates.capacity());
+        //let mut queue = PriorityQueue::new(candidate_count);
         queue.merge_pairs(&pairs);
         let index_distance = self.closest_nodes(v, &mut queue, probe_depth);
         (
             queue
                 .iter()
                 .map(|(node_id, distance)| (self.get_vector(node_id), distance))
+                .take(candidate_count)
                 .collect(),
             index_distance,
         )
