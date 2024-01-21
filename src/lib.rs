@@ -883,19 +883,50 @@ impl<C: Comparator + 'static> Hnsw<C> {
             .collect()
     }
 
-    pub fn discover_vectors_to_promote(&self, layer_id: usize) -> Vec<VectorId> {
-        // We need to start with layer zero and proceed upwards
-        self.get_layer(layer_id)
+    pub fn discover_vectors_to_promote(&self, layer_from_top: usize) -> Vec<VectorId> {
+        eprintln!("Discovering@{layer_from_top} (from top)");
+        let layers = &self.layers[0..=layer_from_top];
+        self.get_layer_from_top(layer_from_top)
             .map(|layer| {
-                let supers = self.supers_for_layer(layer_id);
-                layer
-                    .discover_nodes_to_promote(supers)
-                    .iter()
-                    .map(|n| layer.get_vector(*n))
-                    .collect::<Vec<_>>()
+                let promotable: Vec<VectorId> = layer
+                    .nodes
+                    .par_iter()
+                    .flat_map(|vectorid| {
+                        let vec = self.layers[0].comparator.lookup(*vectorid);
+                        let v = AbstractVector::Unstored(&*vec);
+                        let res = search::search_layers(v, 300, layers, 2);
+                        if (!res.is_empty() && res[0].0 == *vectorid)
+                            || self.layers[layer_from_top - 1]
+                                .nodes
+                                .binary_search(vectorid)
+                                .is_ok()
+                        {
+                            None
+                        } else {
+                            Some(*vectorid)
+                        }
+                    })
+                    .collect();
+                promotable
             })
             .unwrap_or_default()
     }
+
+    /*
+        pub fn discover_vectors_to_promote(&self, layer_id: usize) -> Vec<VectorId> {
+            // We need to start with layer zero and proceed upwards
+            self.get_layer(layer_id)
+                .map(|layer| {
+                    let supers = self.supers_for_layer(layer_id);
+                    layer
+                        .discover_nodes_to_promote(supers)
+                        .iter()
+                        .map(|n| layer.get_vector(*n))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+    }
+        */
 
     pub fn extend_layer(&mut self, layer_id: usize, vecs: Vec<VectorId>) {
         let layer_id_from_top = self.layer_count() - layer_id - 1;
@@ -1100,7 +1131,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
 
     #[allow(unused)]
     fn promote_at_layer(&mut self, layer_from_top: usize) -> (usize, usize) {
-        let mut vecs = self.discover_vectors_to_promote_2(layer_from_top);
+        let mut vecs = self.discover_vectors_to_promote(layer_from_top);
         vecs.sort();
         let count = vecs.len();
         eprintln!("layer_from_top {layer_from_top}: promoting {count} vecs");
@@ -1131,34 +1162,78 @@ impl<C: Comparator + 'static> Hnsw<C> {
         (0, layer_from_top)
     }
 
-    pub fn improve_index(&mut self) {
+    pub fn improve_supernodes(&mut self) {
+        for layer_from_top in 1..self.layer_count() {
+            let layer_id = self.layer_count() - layer_from_top - 1;
+            let (promoted, changed_layer) = self.promote_at_layer(layer_from_top);
+            if promoted > 0 {
+                eprintln!("layer {layer_id}: promoted {promoted} nodes. going back to layer {changed_layer}");
+            }
+        }
+    }
+
+    pub fn improve_neighborhoods(&mut self) {
         for layer_id_from_top in 0..self.layer_count() {
             let count = self.improve_neighborhoods_at_layer(layer_id_from_top);
             eprintln!("layer {layer_id_from_top}: improved {count}");
         }
-        /*
-        let mut layer_id_from_top = 0;
-        while layer_id_from_top < self.layer_count() {
-            let layer = self.get_layer_from_top(layer_id_from_top).unwrap();
-            let threshold = layer.node_count() * layer.neighborhood_size / 100;
-            let mut count = usize::MAX;
-            let mut iteration = 0;
-            while count > threshold {
-                count = self.improve_neighborhoods_at_layer(layer_id_from_top);
-                eprintln!("layer {layer_id_from_top} iteration {iteration}: improved {count} (threshold {threshold})");
-                iteration += 1;
+    }
+
+    pub fn improve_index(&mut self) {
+        self.improve_neighborhoods()
+    }
+
+    pub fn test_recall(&self, candidates: usize, probe_depth: usize) -> f32 {
+        let data = &self.layers[self.layers.len() - 1].nodes;
+        let total = data.len();
+        let total_relevant: usize = data
+            .par_iter()
+            .enumerate()
+            .map(|(i, vid)| {
+                /* eprintln!("XXXXXXXXXXXXXXXXXXXXXX");
+                eprintln!("Searching for {i}");
+                 */
+                let vec = self.layers[0].comparator.lookup(*vid);
+                let v = AbstractVector::Unstored(&*vec);
+                let results = self.search(v, candidates, probe_depth);
+                if VectorId(i) == results[0].0 {
+                    1
+                } else {
+                    0
+                }
+            })
+            .sum();
+        eprintln!("total relevant: {total_relevant}");
+        eprintln!("from total: {total}");
+        let recall = total_relevant as f32 / total as f32;
+        eprintln!("with recall: {recall}");
+
+        recall
+    }
+
+    pub fn improve_index_iterations(&mut self, rounds: usize, threshold: f32) {
+        for _i in 0..rounds {
+            let mut last_improvement = 1.0;
+            let mut last_recall = 0.0;
+
+            while last_improvement > threshold {
+                self.improve_index();
+                let new_recall = self.test_recall(300, 1);
+                last_improvement = new_recall - last_recall;
+                last_recall = new_recall;
+                eprintln!("improved index by {last_improvement}");
             }
 
-            let (promoted, changed_layer) = self.promote_at_layer(layer_id_from_top);
-            if promoted > 0 {
-                eprintln!("layer {layer_id_from_top}: promoted {promoted} nodes. going back to layer {changed_layer}");
-                // since we promoted, it's a good idea to go back up one layer and do optimization there again
-                layer_id_from_top = changed_layer;
-            } else {
-                layer_id_from_top += 1;
+            self.improve_supernodes();
+            let mut last_improvement = 1.0;
+            while last_improvement > threshold {
+                self.improve_index();
+                let new_recall = self.test_recall(300, 1);
+                last_improvement = new_recall - last_recall;
+                last_recall = new_recall;
+                eprintln!("improved index by {last_improvement}");
             }
         }
-        */
     }
 }
 
@@ -1649,6 +1724,7 @@ mod tests {
     #[test]
     fn test_tiny_index_improvement() {
         let mut hnsw: Hnsw<SillyComparator> = make_broken_hnsw();
+        hnsw.improve_supernodes();
         hnsw.improve_index();
         let data = &hnsw.layers[hnsw.layer_count() - 1].comparator.data;
         for (i, datum) in data.iter().enumerate() {
@@ -1698,6 +1774,47 @@ mod tests {
             eprintln!("=========");
         }
 
+        panic!();
+    }
+
+    #[test]
+    fn test_promotion() {
+        let size = 10_000;
+        let dimension = 1536;
+        let mut hnsw: Hnsw<BigComparator> = bigvec::make_random_hnsw(size, dimension);
+
+        let mut improvement_count = 0;
+        let mut last_recall = 0.0;
+        let mut last_improvement = 1.0;
+
+        while last_improvement > 0.01 {
+            eprintln!("{improvement_count} time to improve index");
+            hnsw.improve_index();
+            let new_recall = do_test_recall(&hnsw, 0.0);
+            last_improvement = new_recall - last_recall;
+            last_recall = new_recall;
+            eprintln!("improved index by {last_improvement}");
+            improvement_count += 1;
+            eprintln!("=========");
+        }
+
+        hnsw.improve_supernodes();
+
+        let mut improvement_count = 0;
+        let mut last_improvement = 1.0;
+
+        while last_improvement > 0.01 {
+            eprintln!("{improvement_count} time to improve index");
+            hnsw.improve_index();
+            let new_recall = do_test_recall(&hnsw, 0.0);
+            last_improvement = new_recall - last_recall;
+            last_recall = new_recall;
+            eprintln!("improved index by {last_improvement}");
+            improvement_count += 1;
+            eprintln!("=========");
+        }
+
+        hnsw.improve_index_iterations(2, 0.001);
         panic!();
     }
 }
