@@ -1172,7 +1172,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
             let promotion_count = promoted.len();
             if promotion_count > 0 {
                 eprintln!("layer {layer_id_from_top}: promoted {promotion_count} nodes. going back to layer {changed_layer}");
-                let l = self.get_layer(changed_layer).unwrap();
+                let l = self.get_layer_from_top(changed_layer).unwrap();
                 let promoted_nodes: Vec<NodeId> = promoted
                     .into_iter()
                     .map(|v| l.get_node(v).unwrap())
