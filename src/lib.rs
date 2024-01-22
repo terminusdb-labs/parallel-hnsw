@@ -1030,6 +1030,22 @@ impl<C: Comparator + 'static> Hnsw<C> {
     }
 
     pub fn link_layer_to_better_neighbors(&mut self, layer_from_top: usize) -> usize {
+        self.link_nodes_in_layer_to_better_neighbors(
+            layer_from_top,
+            (0..self.get_layer_from_top(layer_from_top).unwrap().nodes.len())
+                .into_par_iter()
+                .map(NodeId),
+        )
+    }
+
+    pub fn link_nodes_in_layer_to_better_neighbors<
+        I: ParallelIterator<Item = NodeId>,
+        II: IntoParallelIterator<Iter = I, Item = NodeId>,
+    >(
+        &mut self,
+        layer_from_top: usize,
+        nodes: II,
+    ) -> usize {
         let (top_stack, bottom_stack) = self.layers.split_at_mut(layer_from_top);
         let current_layer = &mut bottom_stack[0];
 
@@ -1043,11 +1059,10 @@ impl<C: Comparator + 'static> Hnsw<C> {
             .chunks_exact_mut(current_layer.neighborhood_size)
             .map(RwLock::new)
             .collect();
-        (0..pseudo_layer.node_count())
+        nodes
             .into_par_iter()
-            .map(|node_id| {
+            .map(|local_node| {
                 let mut count = 0;
-                let local_node = NodeId(node_id);
                 let vector = pseudo_layer.get_vector(local_node);
                 let matches =
                     search::search_layers(AbstractVector::Stored(vector), 300, &pseudo_stack, 1);
@@ -1102,7 +1117,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
     }
 
     #[allow(unused)]
-    fn promote_at_layer(&mut self, layer_from_top: usize) -> (usize, usize) {
+    fn promote_at_layer(&mut self, layer_from_top: usize) -> (Vec<VectorId>, usize) {
         let mut vecs = self.discover_vectors_to_promote_2(layer_from_top);
         vecs.sort();
         let count = vecs.len();
@@ -1113,7 +1128,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 // generate new layer(s)
                 let new_top = Self::generate(
                     self.comparator().clone(),
-                    vecs,
+                    vecs.clone(),
                     self.neighborhood_size,
                     self.neighborhood_size,
                     self.order,
@@ -1122,24 +1137,25 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 eprintln!("generated {} new top layers", layers.len());
                 std::mem::swap(&mut self.layers, &mut layers);
                 self.layers.extend(layers);
-                return (count, 0);
+                return (vecs, 0);
             } else {
                 // extend existing layer
                 let layer_above = self.layer_from_top_to_layer(layer_from_top - 1);
-                self.extend_layer(layer_above, vecs);
-                return (count, layer_from_top - 1);
+                self.extend_layer(layer_above, vecs.clone());
+                return (vecs, layer_from_top - 1);
             }
         }
 
-        (0, layer_from_top)
+        (vecs, layer_from_top)
     }
 
     pub fn improve_index(&mut self) {
+        /*
         for layer_id_from_top in 0..self.layer_count() {
             let count = self.improve_neighborhoods_at_layer(layer_id_from_top);
             eprintln!("layer {layer_id_from_top}: improved {count}");
         }
-        /*
+        */
         let mut layer_id_from_top = 0;
         while layer_id_from_top < self.layer_count() {
             let layer = self.get_layer_from_top(layer_id_from_top).unwrap();
@@ -1153,15 +1169,32 @@ impl<C: Comparator + 'static> Hnsw<C> {
             }
 
             let (promoted, changed_layer) = self.promote_at_layer(layer_id_from_top);
-            if promoted > 0 {
-                eprintln!("layer {layer_id_from_top}: promoted {promoted} nodes. going back to layer {changed_layer}");
+            let promotion_count = promoted.len();
+            if promotion_count > 0 {
+                eprintln!("layer {layer_id_from_top}: promoted {promotion_count} nodes. going back to layer {changed_layer}");
+                let l = self.get_layer(changed_layer).unwrap();
+                let promoted_nodes: Vec<NodeId> = promoted
+                    .into_iter()
+                    .map(|v| l.get_node(v).unwrap())
+                    .collect();
+                let threshold = promotion_count * l.neighborhood_size / 100;
+                let mut count = usize::MAX;
+                let mut iteration = 0;
+                while count > threshold {
+                    count = self.link_nodes_in_layer_to_better_neighbors(
+                        changed_layer,
+                        promoted_nodes.par_iter().cloned(),
+                    );
+                    eprintln!("layer {layer_id_from_top} after promotion iteration {iteration}: improved {count} (threshold {threshold})");
+                    iteration += 1;
+                }
                 // since we promoted, it's a good idea to go back up one layer and do optimization there again
+                //self.link_nodes_in_layer_to_better_neighbors(changed_layer, )
                 layer_id_from_top = changed_layer;
             } else {
                 layer_id_from_top += 1;
             }
         }
-        */
     }
 }
 
