@@ -94,7 +94,8 @@ pub fn search_layers_noisy<C: Comparator, L: AsRef<Layer<C>>>(
     probe_depth: usize,
     noisy: bool,
 ) -> (Vec<(VectorId, f32)>, usize) {
-    let upper_layer_candidate_count = 2;
+    //let upper_layer_candidate_count = 2;
+    let upper_layer_candidate_count = number_of_candidates;
     let entry_vector = entry_vector(layers);
     let distance_from_entry = layers
         .first()
