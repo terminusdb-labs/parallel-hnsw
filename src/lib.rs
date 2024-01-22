@@ -1173,18 +1173,17 @@ impl<C: Comparator + 'static> Hnsw<C> {
             if promotion_count > 0 {
                 eprintln!("layer {layer_id_from_top}: promoted {promotion_count} nodes. going back to layer {changed_layer}");
                 let l = self.get_layer_from_top(changed_layer).unwrap();
+                /*
                 let promoted_nodes: Vec<NodeId> = promoted
                     .into_iter()
                     .map(|v| l.get_node(v).unwrap())
                     .collect();
+                */
                 let threshold = promotion_count * l.neighborhood_size / 100;
                 let mut count = usize::MAX;
                 let mut iteration = 0;
                 while count > threshold {
-                    count = self.link_nodes_in_layer_to_better_neighbors(
-                        changed_layer,
-                        promoted_nodes.par_iter().cloned(),
-                    );
+                    count = self.link_layer_to_better_neighbors(changed_layer);
                     eprintln!("layer {changed_layer} after promotion iteration {iteration}: improved {count} (threshold {threshold})");
                     iteration += 1;
                 }
