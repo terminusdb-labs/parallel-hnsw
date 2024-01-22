@@ -1185,7 +1185,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                         changed_layer,
                         promoted_nodes.par_iter().cloned(),
                     );
-                    eprintln!("layer {layer_id_from_top} after promotion iteration {iteration}: improved {count} (threshold {threshold})");
+                    eprintln!("layer {changed_layer} after promotion iteration {iteration}: improved {count} (threshold {threshold})");
                     iteration += 1;
                 }
                 // since we promoted, it's a good idea to go back up one layer and do optimization there again
