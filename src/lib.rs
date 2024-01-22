@@ -20,7 +20,7 @@ use std::{
 };
 
 use itertools::Itertools;
-use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+use rand::{rngs::StdRng, seq::SliceRandom, thread_rng, Rng, SeedableRng};
 use rand_distr::{Distribution, Exp};
 use rayon::prelude::*;
 use std::fmt::Debug;
@@ -1116,6 +1116,80 @@ impl<C: Comparator + 'static> Hnsw<C> {
         self.layer_count() - layer - 1
     }
 
+    fn promote_batch(&mut self, layer_from_top: usize) -> bool {
+        let mut vecs = self.discover_vectors_to_promote_2(layer_from_top);
+        if vecs.is_empty() {
+            return false;
+        }
+        vecs.sort();
+        if layer_from_top == 0 {
+            // just construct a new hnsw and copy over layer stack
+            let new_top = Self::generate(
+                self.comparator().clone(),
+                vecs.clone(),
+                self.neighborhood_size,
+                self.neighborhood_size,
+                self.order,
+            );
+            let mut layers = new_top.layers;
+            eprintln!("generated {} new top layers", layers.len());
+            std::mem::swap(&mut self.layers, &mut layers);
+            self.layers.extend(layers);
+        } else {
+            let mut sizes: Vec<_> = self
+                .layers
+                .iter()
+                .take(layer_from_top)
+                .map(|l| l.node_count())
+                .collect();
+            sizes.reverse();
+            eprintln!("sizes: {sizes:?}");
+            let mut promotions = calculate_partitions_for_additions(&sizes, vecs.len(), self.order);
+            let mut new_top_len = 0;
+            if promotions.len() > layer_from_top {
+                // we are going to need at least one more layer
+                let count = promotions[layer_from_top];
+                let top_vecs: Vec<_> = vecs.iter().cloned().take(count).collect();
+                let new_top = Self::generate(
+                    self.comparator().clone(),
+                    top_vecs.clone(),
+                    self.neighborhood_size,
+                    self.neighborhood_size,
+                    self.order,
+                );
+                let mut layers = new_top.layers;
+                new_top_len = layers.len();
+                eprintln!("generated {} new top layers", layers.len());
+                std::mem::swap(&mut self.layers, &mut layers);
+                self.layers.extend(layers);
+            }
+
+            promotions.truncate(layer_from_top);
+            promotions.reverse();
+
+            eprintln!("promotion sizes after maybe having generated a top {promotions:?}");
+
+            for (original_layer_id_from_top, promotion_count) in promotions.into_iter().enumerate()
+            {
+                if promotion_count == 0 {
+                    continue;
+                }
+                let layer_id_from_top = original_layer_id_from_top + new_top_len;
+                let layer = self.get_layer_from_top(layer_id_from_top).unwrap();
+                let vecs_to_promote: Vec<_> = vecs
+                    .iter()
+                    .cloned()
+                    .take(promotion_count)
+                    .filter(|v| layer.get_node(*v).is_none())
+                    .collect();
+
+                let layer_id_from_bottom = self.layer_from_top_to_layer(layer_id_from_top);
+                self.extend_layer(layer_id_from_bottom, vecs_to_promote)
+            }
+        }
+        true
+    }
+
     #[allow(unused)]
     fn promote_at_layer(&mut self, layer_from_top: usize) -> (Vec<VectorId>, usize) {
         let mut vecs = self.discover_vectors_to_promote_2(layer_from_top);
@@ -1168,6 +1242,14 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 iteration += 1;
             }
 
+            if self.promote_batch(layer_id_from_top) {
+                // go back to top
+                layer_id_from_top = 0;
+            } else {
+                layer_id_from_top += 1;
+            }
+
+            /*
             let (promoted, changed_layer) = self.promote_at_layer(layer_id_from_top);
             let promotion_count = promoted.len();
             if promotion_count > 0 {
@@ -1193,6 +1275,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
             } else {
                 layer_id_from_top += 1;
             }
+            */
         }
     }
 }
@@ -1397,6 +1480,27 @@ fn calculate_partitions(total_size: usize, order: usize) -> Vec<usize> {
     }
     partitions.reverse();
     partitions
+}
+
+fn calculate_partitions_for_additions(
+    sizes_from_bottom: &[usize],
+    new_vecs: usize,
+    order: usize,
+) -> Vec<usize> {
+    let mut new_partitions = calculate_partitions(sizes_from_bottom[0] + new_vecs, order);
+    new_partitions.reverse();
+    eprintln!("new partitions: {new_partitions:?}\nsizes: {sizes_from_bottom:?}");
+    new_partitions
+        .into_iter()
+        .enumerate()
+        .map(|(ix, p)| {
+            if ix >= sizes_from_bottom.len() {
+                p
+            } else {
+                p.saturating_sub(sizes_from_bottom[ix])
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1733,6 +1837,19 @@ mod tests {
             eprintln!("=========");
         }
 
+        panic!();
+    }
+
+    #[test]
+    fn calculate_partitions_with_additions() {
+        let order = 2;
+        let mut sizes = calculate_partitions(1000, order);
+        sizes.reverse();
+        eprintln!("sizes: {:?}", sizes);
+        let promotion_count = 100;
+        let result = calculate_partitions_for_additions(&sizes[1..], promotion_count, order);
+        let expected = vec![100, 50, 25, 13, 6, 3, 2, 1, 1, 1];
+        assert_eq!(expected, result);
         panic!();
     }
 }
