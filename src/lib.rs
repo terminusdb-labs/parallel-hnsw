@@ -820,6 +820,10 @@ impl<C: Comparator + 'static> Hnsw<C> {
         hnsw
     }
 
+    pub fn len(&self) -> usize {
+        self.get_layer(0).unwrap().node_count()
+    }
+
     pub fn all_vectors(&self) -> AllVectorIterator {
         self.get_layer(0)
             .map(|layer| {
@@ -1221,6 +1225,45 @@ impl<C: Comparator + 'static> Hnsw<C> {
         }
 
         (vecs, layer_from_top)
+    }
+
+    pub fn recall(&self) -> f32 {
+        let total = self.len();
+        let total_relevant: usize = self
+            .all_vectors()
+            .par_bridge()
+            .map(|vector_id| {
+                let vector = self.comparator().lookup(vector_id);
+                let vector_data = &*vector;
+                /* eprintln!("XXXXXXXXXXXXXXXXXXXXXX");
+                eprintln!("Searching for {i}");
+                */
+                let v = AbstractVector::Unstored(vector_data);
+                let results = self.search(v, 300, 2);
+                if vector_id == results[0].0 {
+                    1
+                } else {
+                    0
+                }
+            })
+            .sum();
+
+        total_relevant as f32 / total as f32
+    }
+
+    pub fn improve_neighbors(&mut self, threshold: f32) {
+        let mut last_recall = 0.0_f32;
+        let mut last_improvement = 1.0_f32;
+        while last_improvement > threshold {
+            for layer_id_from_top in 0..self.layer_count() {
+                let count = self.improve_neighborhoods_at_layer(layer_id_from_top);
+                eprintln!("layer {layer_id_from_top}: improved {count}");
+            }
+            let recall = self.recall();
+            last_improvement = recall - last_recall;
+            last_recall = recall;
+            eprintln!("recall {recall} (improvement: {last_improvement})");
+        }
     }
 
     pub fn improve_index(&mut self) {
