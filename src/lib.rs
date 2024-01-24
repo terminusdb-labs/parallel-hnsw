@@ -1231,6 +1231,35 @@ impl<C: Comparator + 'static> Hnsw<C> {
         (vecs, layer_from_top)
     }
 
+    pub fn stochastic_recall(&self, divisor: usize) -> f32 {
+        let mut rng = StdRng::seed_from_u64(42);
+        let total = self.len();
+        let selection = usize::max(1, total / divisor);
+        let mut seen = HashSet::new();
+        let vecs_to_find: Vec<VectorId> = (0..selection)
+            .map(|_| {
+                let vid: VectorId;
+                loop {
+                    let v = VectorId(rng.gen_range(0..total));
+                    if seen.insert(v) {
+                        vid = v;
+                        break;
+                    }
+                }
+                vid
+            })
+            .collect();
+        let relevant: usize = vecs_to_find
+            .par_iter()
+            .filter(|vid| {
+                let res = self.search(AbstractVector::Stored(**vid), 300, 2);
+                res.iter().map(|(v, _)| v).any(|v| v == *vid)
+            })
+            .count();
+
+        relevant as f32 / selection as f32
+    }
+
     pub fn recall(&self) -> f32 {
         let total = self.len();
         let total_relevant: usize = self
@@ -1262,7 +1291,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 let count = self.improve_neighborhoods_at_layer(layer_id_from_top);
                 eprintln!("layer {layer_id_from_top}: improved {count}");
             }
-            let recall = self.recall();
+            let recall = self.stochastic_recall(1000);
             last_improvement = recall - last_recall;
             last_recall = recall;
             eprintln!("recall {recall} (improvement: {last_improvement})");
