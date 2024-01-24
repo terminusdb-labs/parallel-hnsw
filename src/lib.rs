@@ -824,6 +824,10 @@ impl<C: Comparator + 'static> Hnsw<C> {
         self.get_layer(0).unwrap().node_count()
     }
 
+    pub fn par_all_vectors(&self) -> impl ParallelIterator<Item = VectorId> + '_ {
+        self.get_layer(0).unwrap().nodes.par_iter().cloned()
+    }
+
     pub fn all_vectors(&self) -> AllVectorIterator {
         self.get_layer(0)
             .map(|layer| {
@@ -1230,8 +1234,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
     pub fn recall(&self) -> f32 {
         let total = self.len();
         let total_relevant: usize = self
-            .all_vectors()
-            .par_bridge()
+            .par_all_vectors()
             .map(|vector_id| {
                 let vector = self.comparator().lookup(vector_id);
                 let vector_data = &*vector;
