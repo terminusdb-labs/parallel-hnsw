@@ -1286,7 +1286,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
     pub fn improve_neighbors(&mut self, threshold: f32) {
         let mut last_recall = 0.0_f32;
         let mut last_improvement = 1.0_f32;
-        while last_improvement > threshold {
+        while last_improvement >= threshold {
             for layer_id_from_top in 0..self.layer_count() {
                 let count = self.improve_neighborhoods_at_layer(layer_id_from_top);
                 eprintln!("layer {layer_id_from_top}: improved {count}");
