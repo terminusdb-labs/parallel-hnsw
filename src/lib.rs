@@ -1141,6 +1141,14 @@ impl<C: Comparator + 'static> Hnsw<C> {
         if vecs.is_empty() {
             return false;
         }
+        eprintln!(
+            "vec len for promotion: {}@{} (out of {})",
+            vecs.len(),
+            layer_from_top,
+            self.get_layer_from_top(layer_from_top)
+                .unwrap()
+                .node_count()
+        );
         vecs.sort();
         if layer_from_top == 0 {
             // just construct a new hnsw and copy over layer stack
@@ -1170,7 +1178,6 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 .collect();
             sizes.reverse();
             eprintln!("sizes: {sizes:?}");
-            eprintln!("vec len for promotion: {}@{}", vecs.len(), layer_from_top);
             let mut promotions = calculate_partitions_for_additions(&sizes, vecs.len(), self.order);
             eprintln!("promotions: {promotions:?}");
             let mut new_top_len = 0;
@@ -1196,6 +1203,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
             }
 
             promotions.truncate(layer_from_top);
+            eprintln!("truncated promotions: {promotions:?}");
             promotions.reverse();
 
             eprintln!("promotion sizes after maybe having generated a top {promotions:?}");
@@ -1587,7 +1595,7 @@ fn choose_n(
     set.into_iter().collect()
 }
 
-fn calculate_partitions(total_size: usize, order: usize) -> Vec<usize> {
+fn calculate_partitions_from_bottom(total_size: usize, order: usize) -> Vec<usize> {
     let mut partitions: Vec<usize> = vec![];
     let mut size = total_size;
     let layer_count = usize::max(1, (total_size as f32).log(order as f32).ceil() as usize);
@@ -1595,6 +1603,12 @@ fn calculate_partitions(total_size: usize, order: usize) -> Vec<usize> {
         partitions.push(size);
         size /= order;
     }
+
+    partitions
+}
+
+fn calculate_partitions(total_size: usize, order: usize) -> Vec<usize> {
+    let mut partitions = calculate_partitions_from_bottom(total_size, order);
     partitions.reverse();
     partitions
 }
@@ -1604,20 +1618,51 @@ fn calculate_partitions_for_additions(
     new_vecs: usize,
     order: usize,
 ) -> Vec<usize> {
-    let mut new_partitions = calculate_partitions(sizes_from_bottom[0] + new_vecs, order);
-    new_partitions.reverse();
+    let mut new_partitions =
+        calculate_partitions_from_bottom(sizes_from_bottom[0] + new_vecs, order);
+    // ensure we have at least as many partitions as existing sizes (but maybe more)
+    if new_partitions.len() < sizes_from_bottom.len() {
+        new_partitions.resize(sizes_from_bottom.len(), 0);
+    }
     eprintln!("new partitions: {new_partitions:?}\nsizes: {sizes_from_bottom:?}");
-    let mut partition_additions: Vec<usize> = new_partitions
+
+    let mut new_sizes: Vec<usize> = new_partitions
         .into_iter()
         .enumerate()
         .map(|(ix, p)| {
             if ix >= sizes_from_bottom.len() {
                 p
             } else {
-                p.saturating_sub(sizes_from_bottom[ix])
+                usize::max(p, sizes_from_bottom[ix])
             }
         })
         .collect();
+
+    // Ensure that the new layer stack is monotonic.
+    // We have to make sure that we don't cause a super layer to grow larger than its sublayers.
+    let mut last = 0_usize;
+    for elt in new_sizes.iter_mut().rev() {
+        if last > *elt {
+            *elt = last;
+        }
+        last = *elt;
+    }
+    eprintln!("corrected partitions: {new_sizes:?}");
+
+    let mut partition_additions: Vec<usize> = new_sizes
+        .into_iter()
+        .enumerate()
+        .map(|(ix, p)| {
+            if ix >= sizes_from_bottom.len() {
+                p
+            } else {
+                p - sizes_from_bottom[ix]
+            }
+        })
+        .collect();
+
+    // ensure that promotions are reverse monotonic.
+    // We have to make sure that if we promote at a superlayer, it is also promoted at the sublayer.
     let mut last = 0_usize;
     for elt in partition_additions.iter_mut().rev() {
         if last > *elt {
