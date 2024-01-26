@@ -140,3 +140,34 @@ pub fn search_layers_noisy<C: Comparator, L: AsRef<Layer<C>>>(
 
     (candidates.iter().collect(), last_index_distance)
 }
+
+pub fn assert_layer_invariants<C: Comparator, L: AsRef<Layer<C>>>(layers: &[L]) {
+    if layers.len() <= 1 {
+        return;
+    }
+    for i in 0..layers.len() - 1 {
+        let current_layer = layers[i].as_ref();
+        let next_layer = layers[i + 1].as_ref();
+        let mut last_node: Option<VectorId> = None;
+        for node in current_layer.nodes.iter() {
+            if let Some(last_node) = last_node {
+                if *node <= last_node {
+                    panic!("Layer did not meet invariants, nodes are not monotonic {node:?} > {last_node:?}, layer_from_top {}", i);
+                }
+            }
+            last_node = Some(*node);
+            if next_layer.nodes.binary_search(node).is_err() {
+                eprintln!("{:?}", layers[i].as_ref().nodes);
+                eprintln!("{:?}", layers[i].as_ref().neighbors);
+
+                eprintln!("{:?}", layers[i + 1].as_ref().nodes);
+                eprintln!("{:?}", layers[i + 1].as_ref().neighbors);
+
+                panic!(
+                    "Layer did not meet invariants, missing: {node:?} in layer_from_top {}",
+                    i + 1
+                );
+            }
+        }
+    }
+}
