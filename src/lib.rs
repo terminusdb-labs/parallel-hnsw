@@ -1158,6 +1158,9 @@ impl<C: Comparator + 'static> Hnsw<C> {
             );
             std::mem::swap(&mut self.layers, &mut layers);
             self.layers.extend(layers);
+            for layer in self.layers.iter() {
+                eprintln!("layer count: {}", layer.node_count());
+            }
         } else {
             let mut sizes: Vec<_> = self
                 .layers
@@ -1167,6 +1170,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 .collect();
             sizes.reverse();
             eprintln!("sizes: {sizes:?}");
+            eprintln!("vec len for promotion: {}@{}", vecs.len(), layer_from_top);
             let mut promotions = calculate_partitions_for_additions(&sizes, vecs.len(), self.order);
             eprintln!("promotions: {promotions:?}");
             let mut new_top_len = 0;
@@ -1186,6 +1190,9 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 eprintln!("generated {} new top layers (and extending)", layers.len());
                 std::mem::swap(&mut self.layers, &mut layers);
                 self.layers.extend(layers);
+                for layer in self.layers.iter() {
+                    eprintln!("layer count: {}", layer.node_count());
+                }
             }
 
             promotions.truncate(layer_from_top);
