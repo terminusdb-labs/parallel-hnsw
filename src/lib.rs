@@ -949,7 +949,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 neighbors: old_neighbors,
         };
          */
-        eprintln!("layer nodes: {:?}", layer.nodes);
+        //eprintln!("layer nodes: {:?}", layer.nodes);
         pseudo_layers.push(layer);
         assert_layer_invariants(&pseudo_layers);
         eprintln!("Finding neighborhoods");
@@ -958,14 +958,12 @@ impl<C: Comparator + 'static> Hnsw<C> {
             .iter() // TODO: Make this par_iter()
             .flat_map(|v| {
                 let vec = c.lookup(*v);
-                eprintln!("before");
                 let mut distances: Vec<(VectorId, f32)> = search::search_layers(
                     AbstractVector::Unstored(&*vec),
                     10 * layer.neighborhood_size,
                     &pseudo_layers,
                     1,
                 );
-                eprintln!("after");
                 let cross_results = cross_compare.get(v).unwrap();
 
                 distances.extend(cross_results);
@@ -1344,17 +1342,18 @@ impl<C: Comparator + 'static> Hnsw<C> {
             let threshold = layer.node_count() * layer.neighborhood_size / 100;
             let mut count = usize::MAX;
             let mut iteration = 0;
-            /*
+
             while count > threshold {
                 count = self.improve_neighborhoods_at_layer(layer_id_from_top);
                 eprintln!("layer {layer_id_from_top} iteration {iteration}: improved {count} (threshold {threshold})");
                 iteration += 1;
-            }*/
+            }
 
             if self.promote_batch(layer_id_from_top) {
+                /*
                 for layer in self.layers.iter() {
                     eprintln!("layer size: {}", layer.node_count());
-                }
+                }*/
                 assert_layer_invariants(&self.layers);
                 eprintln!("going back to top");
                 // go back to top
@@ -1921,20 +1920,8 @@ mod tests {
         let size = 10_000;
         let dimension = 1536;
         let mut hnsw: Hnsw<BigComparator> = bigvec::make_random_hnsw(size, dimension);
-        do_test_recall(&hnsw, 0.0);
-        let mut improvement_count = 0;
-        let mut last_recall = 0.0;
-        let mut last_improvement = 1.0;
-        while last_improvement > 0.001 {
-            eprintln!("{improvement_count} time to improve index");
-            hnsw.improve_index();
-            let new_recall = do_test_recall(&hnsw, 0.0);
-            last_improvement = new_recall - last_recall;
-            last_recall = new_recall;
-            eprintln!("improved index by {last_improvement}");
-            improvement_count += 1;
-            eprintln!("=========");
-        }
+        hnsw.improve_index();
+        do_test_recall(&hnsw, 1.0);
         panic!();
     }
 
