@@ -824,6 +824,36 @@ impl<C: Comparator + 'static> Hnsw<C> {
         self.get_layer(0).unwrap().node_count()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.get_layer(0)
+            .map(|l| l.nodes.is_empty())
+            .unwrap_or(false)
+    }
+
+    pub fn knn(
+        &self,
+        k: usize,
+        probe_depth: usize,
+    ) -> impl ParallelIterator<Item = (VectorId, Vec<(VectorId, f32)>)> + '_ {
+        let layer = &self.layers[self.layers.len() - 1];
+        let nodes = &layer.nodes;
+
+        nodes.par_iter().enumerate().map(move |(i, v)| {
+            let node = NodeId(i);
+            let abstract_vector = AbstractVector::Stored(*v);
+            let eff_factor = 3;
+            let mut pq = PriorityQueue::new(k * eff_factor);
+            pq.merge_pairs(&[(node, 0.0)]);
+            layer.closest_nodes(abstract_vector, &mut pq, probe_depth);
+            let distances: Vec<_> = pq
+                .iter()
+                .map(|(node_id, distance)| (layer.get_vector(node_id), distance))
+                .take(k)
+                .collect();
+            (*v, distances)
+        })
+    }
+
     pub fn par_all_vectors(&self) -> impl ParallelIterator<Item = VectorId> + '_ {
         self.get_layer(0).unwrap().nodes.par_iter().cloned()
     }
@@ -2032,5 +2062,26 @@ mod tests {
         let expected = vec![100, 50, 25, 13, 6, 3, 2, 1, 1, 1];
         assert_eq!(expected, result);
         panic!();
+    }
+
+    #[test]
+    fn test_knn() {
+        let hnsw: Hnsw<SillyComparator> = make_simple_hnsw();
+        let mut results: Vec<_> = hnsw.knn(1, 1).collect();
+        results.sort_by_key(|(v, _d)| *v);
+        assert_eq!(
+            results,
+            vec![
+                (VectorId(0), vec![(VectorId(0), 0.0)]),
+                (VectorId(1), vec![(VectorId(1), 0.0)]),
+                (VectorId(2), vec![(VectorId(2), 0.0)]),
+                (VectorId(3), vec![(VectorId(3), 0.0)]),
+                (VectorId(4), vec![(VectorId(4), 0.0)]),
+                (VectorId(5), vec![(VectorId(5), 0.0)]),
+                (VectorId(6), vec![(VectorId(6), 0.0)]),
+                (VectorId(7), vec![(VectorId(7), 0.0)]),
+                (VectorId(8), vec![(VectorId(8), 0.0)])
+            ]
+        );
     }
 }
