@@ -855,6 +855,37 @@ impl<C: Comparator + 'static> Hnsw<C> {
         })
     }
 
+    pub fn threshold_nn(
+        &self,
+        threshold: f32,
+        probe_depth: usize,
+    ) -> impl ParallelIterator<Item = (VectorId, Vec<(VectorId, f32)>)> + '_ {
+        let layer = &self.layers[self.layers.len() - 1];
+        let nodes = &layer.nodes;
+
+        nodes.par_iter().enumerate().map(move |(i, v)| {
+            let node = NodeId(i);
+            let abstract_vector = AbstractVector::Stored(*v);
+            let mut k = layer.neighborhood_size;
+            let mut pq = PriorityQueue::new(k);
+            pq.merge_pairs(&[(node, 0.0)]);
+            let mut last = 0.0;
+            while last < threshold {
+                layer.closest_nodes(abstract_vector.clone(), &mut pq, probe_depth);
+                last = pq.last().expect("should have at least retrieved self").1;
+                if last < threshold {
+                    pq.resize(pq.len() * 2);
+                }
+            }
+            let distances: Vec<_> = pq
+                .iter()
+                .take_while(|(n, distance)| *n != node && *distance < threshold)
+                .map(|(node_id, distance)| (layer.get_vector(node_id), distance))
+                .collect();
+            (*v, distances)
+        })
+    }
+
     pub fn par_all_vectors(&self) -> impl ParallelIterator<Item = VectorId> + '_ {
         self.get_layer(0).unwrap().nodes.par_iter().cloned()
     }

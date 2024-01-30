@@ -166,10 +166,32 @@ impl<'a, Id: PartialOrd + PartialEq + Copy + EmptyValue> PriorityQueue<'a, Id> {
         }
     }
 
+    pub fn with_capacity(size: usize, capacity: usize) -> PriorityQueue<'static, Id> {
+        assert!(capacity >= size);
+        let mut data = Vec::with_capacity(capacity);
+        let mut priorities = Vec::with_capacity(capacity);
+        data.resize(size, Id::empty());
+        priorities.resize(size, f32::MAX);
+        PriorityQueue {
+            data: VecOrSlice::Vec(vec![Id::empty(); size]),
+            priorities: VecOrSlice::Vec(vec![f32::MAX; size]),
+        }
+    }
+
     pub fn from_slices(data: &'a mut [Id], priorities: &'a mut [f32]) -> PriorityQueue<'a, Id> {
         PriorityQueue {
             data: VecOrSlice::Slice(data),
             priorities: VecOrSlice::Slice(priorities),
+        }
+    }
+
+    pub fn resize(&mut self, capacity: usize) {
+        match (&mut self.data, &mut self.priorities) {
+            (VecOrSlice::Vec(data), VecOrSlice::Vec(priorities)) => {
+                data.resize(capacity, Id::empty());
+                priorities.resize(capacity, f32::MAX)
+            }
+            _ => panic!("cannot resize queue backed by slices"),
         }
     }
 }
