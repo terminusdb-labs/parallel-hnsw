@@ -847,6 +847,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
             layer.closest_nodes(abstract_vector, &mut pq, probe_depth);
             let distances: Vec<_> = pq
                 .iter()
+                .filter(|(n, _)| *n != node)
                 .map(|(node_id, distance)| (layer.get_vector(node_id), distance))
                 .take(k)
                 .collect();
@@ -2072,15 +2073,15 @@ mod tests {
         assert_eq!(
             results,
             vec![
-                (VectorId(0), vec![(VectorId(0), 0.0)]),
-                (VectorId(1), vec![(VectorId(1), 0.0)]),
-                (VectorId(2), vec![(VectorId(2), 0.0)]),
-                (VectorId(3), vec![(VectorId(3), 0.0)]),
-                (VectorId(4), vec![(VectorId(4), 0.0)]),
-                (VectorId(5), vec![(VectorId(5), 0.0)]),
-                (VectorId(6), vec![(VectorId(6), 0.0)]),
-                (VectorId(7), vec![(VectorId(7), 0.0)]),
-                (VectorId(8), vec![(VectorId(8), 0.0)])
+                (VectorId(0), vec![(VectorId(3), 0.29289323)]),
+                (VectorId(1), vec![(VectorId(3), 0.29289323)]),
+                (VectorId(2), vec![(VectorId(8), 0.29289323)]),
+                (VectorId(3), vec![(VectorId(4), 0.1835745)]),
+                (VectorId(4), vec![(VectorId(3), 0.1835745)]),
+                (VectorId(5), vec![(VectorId(1), 1.0)]),
+                (VectorId(6), vec![(VectorId(0), 1.0)]),
+                (VectorId(7), vec![(VectorId(0), 1.0)]),
+                (VectorId(8), vec![(VectorId(4), 0.1835745)])
             ]
         );
     }
