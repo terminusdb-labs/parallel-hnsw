@@ -859,7 +859,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         &self,
         threshold: f32,
         probe_depth: usize,
-    ) -> impl ParallelIterator<Item = (VectorId, Vec<(VectorId, f32)>)> + '_ {
+    ) -> impl IndexedParallelIterator<Item = (VectorId, Vec<(VectorId, f32)>)> + '_ {
         let layer = &self.layers[self.layers.len() - 1];
         let nodes = &layer.nodes;
 
