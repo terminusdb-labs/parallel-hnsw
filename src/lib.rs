@@ -879,7 +879,8 @@ impl<C: Comparator + 'static> Hnsw<C> {
             }
             let distances: Vec<_> = pq
                 .iter()
-                .take_while(|(n, distance)| *n != node && *distance < threshold)
+                .filter(|(n, _)| *n != node)
+                .take_while(|(n, distance)| *distance < threshold)
                 .map(|(node_id, distance)| (layer.get_vector(node_id), distance))
                 .collect();
             (*v, distances)
@@ -2113,6 +2114,47 @@ mod tests {
                 (VectorId(6), vec![(VectorId(0), 1.0)]),
                 (VectorId(7), vec![(VectorId(0), 1.0)]),
                 (VectorId(8), vec![(VectorId(4), 0.1835745)])
+            ]
+        );
+    }
+
+    #[test]
+    fn test_threshold_nn() {
+        let hnsw: Hnsw<SillyComparator> = make_simple_hnsw();
+        let mut results: Vec<_> = hnsw.threshold_nn(0.3, 1).collect();
+        results.sort_by_key(|(v, _d)| *v);
+        assert_eq!(
+            results,
+            vec![
+                (VectorId(0), vec![(VectorId(3), 0.29289323)]),
+                (
+                    VectorId(1),
+                    vec![(VectorId(3), 0.29289323), (VectorId(8), 0.29289323)],
+                ),
+                (VectorId(2), vec![(VectorId(8), 0.29289323)]),
+                (
+                    VectorId(3),
+                    vec![
+                        (VectorId(4), 0.1835745),
+                        (VectorId(0), 0.29289323),
+                        (VectorId(1), 0.29289323),
+                    ],
+                ),
+                (
+                    VectorId(4),
+                    vec![(VectorId(3), 0.1835745), (VectorId(8), 0.1835745)],
+                ),
+                (VectorId(5), vec![]),
+                (VectorId(6), vec![]),
+                (VectorId(7), vec![]),
+                (
+                    VectorId(8),
+                    vec![
+                        (VectorId(4), 0.1835745),
+                        (VectorId(1), 0.29289323),
+                        (VectorId(2), 0.29289323),
+                    ],
+                ),
             ]
         );
     }
