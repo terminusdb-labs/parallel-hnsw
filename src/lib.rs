@@ -870,11 +870,13 @@ impl<C: Comparator + 'static> Hnsw<C> {
             let mut pq = PriorityQueue::new(k);
             pq.merge_pairs(&[(node, 0.0)]);
             let mut last = 0.0;
-            while last < threshold {
+            let mut last_size = 0;
+            while last < threshold && pq.len() > last_size {
+                last_size = pq.len();
                 layer.closest_nodes(abstract_vector.clone(), &mut pq, probe_depth);
                 last = pq.last().expect("should have at least retrieved self").1;
-                if last < threshold {
-                    pq.resize(pq.len() * 2);
+                if last < threshold && pq.len() == pq.capacity() {
+                    pq.resize_capacity(pq.capacity() * 2);
                 }
             }
             let distances: Vec<_> = pq

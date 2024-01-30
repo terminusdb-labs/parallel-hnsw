@@ -185,7 +185,7 @@ impl<'a, Id: PartialOrd + PartialEq + Copy + EmptyValue> PriorityQueue<'a, Id> {
         }
     }
 
-    pub fn resize(&mut self, capacity: usize) {
+    pub fn resize_capacity(&mut self, capacity: usize) {
         match (&mut self.data, &mut self.priorities) {
             (VecOrSlice::Vec(data), VecOrSlice::Vec(priorities)) => {
                 data.resize(capacity, Id::empty());
