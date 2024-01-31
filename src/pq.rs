@@ -107,6 +107,7 @@ impl<
         // TODO review this number
         let number_of_clusters = selection_size;
         let prng = StdRng::seed_from_u64(42);
+        eprintln!("Running kmeans");
         let model = KMeans::params_with_rng(number_of_clusters, prng.clone())
             .tolerance(1e-2)
             .fit(&observations)
@@ -141,6 +142,7 @@ impl<
             hnsw: centroid_hnsw,
         };
         let mut vids: Vec<VectorId> = Vec::new();
+        eprintln!("centroiding");
         for chunk in comparator.vector_chunks() {
             let mut quantized = Vec::new();
             for v in chunk {
@@ -151,6 +153,7 @@ impl<
         let m = 24;
         let m0 = 48;
         let order = 12;
+        eprintln!("generating");
         let hnsw: Hnsw<QuantizedComparator> =
             Hnsw::generate(quantized_comparator, vids, m, m0, order);
         Self {
