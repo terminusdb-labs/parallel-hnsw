@@ -2,7 +2,7 @@ use crate::{AbstractVector, Comparator, Hnsw, VectorId};
 use linfa::traits::Fit;
 use linfa::DatasetBase;
 use linfa_clustering::KMeans;
-use ndarray::Array;
+use ndarray::{Array, Array1, Array2};
 use rand::{rngs::StdRng, SeedableRng};
 
 trait Quantizer<const SIZE: usize, const QUANTIZED_SIZE: usize> {
@@ -102,8 +102,9 @@ impl<
             .flat_map(|v| v.into_iter())
             .collect();
         let sub_length = selection_size * SIZE / CENTROID_SIZE;
-        let sub_arrays = Array::from_shape_vec((CENTROID_SIZE, sub_length), data).unwrap();
-        let observations = DatasetBase::from(sub_arrays.clone());
+        let sub_arrays = Array::from_shape_vec((sub_length, CENTROID_SIZE), data).unwrap();
+        eprintln!("sub_arrays: {sub_arrays:?}");
+        let observations = DatasetBase::from(sub_arrays);
         // TODO review this number
         let number_of_clusters = selection_size;
         let prng = StdRng::seed_from_u64(42);
@@ -112,7 +113,11 @@ impl<
             .tolerance(1e-2)
             .fit(&observations)
             .expect("KMeans fitted");
-        let centroid_flat: Vec<f32> = model.centroids().clone().into_raw_vec();
+        let centroid_array: Array2<f32> = model.centroids().clone();
+        let centroid_flat: Vec<f32> = centroid_array
+            .into_shape(number_of_clusters * CENTROID_SIZE)
+            .unwrap()
+            .to_vec();
         let centroids: Vec<[f32; CENTROID_SIZE]> = centroid_flat
             .chunks(CENTROID_SIZE)
             .map(|v| {
@@ -122,17 +127,21 @@ impl<
             })
             .collect();
         //
+        eprintln!("Number of centroids: {}", centroids.len());
+
         let vector_ids = centroid_comparator.store(Box::new(centroids.into_iter()));
         let centroid_m = 24;
         let centroid_m0 = 48;
         let centroid_order = 12;
-        let centroid_hnsw: Hnsw<CentroidComparator> = Hnsw::generate(
+        let mut centroid_hnsw: Hnsw<CentroidComparator> = Hnsw::generate(
             centroid_comparator,
             vector_ids,
             centroid_m,
             centroid_m0,
             centroid_order,
         );
+        //centroid_hnsw.improve_index();
+        centroid_hnsw.improve_neighbors(0.01);
         let centroid_quantizer: HnswQuantizer<
             SIZE,
             CENTROID_SIZE,
@@ -182,23 +191,37 @@ impl<
 }
 
 mod tests {
+    fn clamp_01(f: f32) -> f32 {
+        if f <= 0.0 {
+            0.0
+        } else if f >= 1.0 {
+            1.0
+        } else {
+            f
+        }
+    }
+
+    fn normalize_cosine_distance(f: f32) -> f32 {
+        clamp_01((f - 1.0) / -2.0)
+    }
+
     // assumes normalized vectors
     fn cosine32(v1: &[f32; 32], v2: &[f32; 32]) -> f32 {
-        (1.0 - v1
-            .iter()
-            .zip(v2.iter())
-            .map(|(f1, f2)| f1 * f2)
-            .sum::<f32>())
-            / 2.0
+        normalize_cosine_distance(
+            v1.iter()
+                .zip(v2.iter())
+                .map(|(f1, f2)| f1 * f2)
+                .sum::<f32>(),
+        )
     }
 
     fn cosine1536(v1: &[f32; 1536], v2: &[f32; 1536]) -> f32 {
-        (1.0 - v1
-            .iter()
-            .zip(v2.iter())
-            .map(|(f1, f2)| f1 * f2)
-            .sum::<f32>())
-            / 2.0
+        normalize_cosine_distance(
+            v1.iter()
+                .zip(v2.iter())
+                .map(|(f1, f2)| f1 * f2)
+                .sum::<f32>(),
+        )
     }
 
     use std::{
@@ -206,6 +229,7 @@ mod tests {
         sync::{Arc, RwLock, RwLockReadGuard},
     };
 
+    use ndarray::Array2;
     use rand::{rngs::StdRng, SeedableRng};
 
     use crate::{
@@ -326,7 +350,7 @@ mod tests {
             }
         }
 
-        fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
+        fn compare_raw(&self, _v1: &Self::T, _v2: &Self::T) -> f32 {
             todo!()
         }
     }
@@ -362,6 +386,17 @@ mod tests {
         fn vector_chunks(&self) -> impl Iterator<Item = Vec<Self::T>> {
             vec![self.data.read().unwrap().clone()].into_iter()
         }
+    }
+
+    #[test]
+    fn test_arrays() {
+        let a = Array2::from_shape_vec((2, 3), vec![0, 1, 2, 3, 4, 5]).unwrap();
+        let b = a.t();
+        let x = a.clone().into_raw_vec();
+        eprintln!("x: {x:?}");
+        let y = b.into_owned().into_raw_vec();
+        eprintln!("y: {y:?}");
+        panic!();
     }
 
     #[test]
