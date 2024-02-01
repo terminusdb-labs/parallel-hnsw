@@ -192,6 +192,15 @@ mod tests {
             / 2.0
     }
 
+    fn cosine1536(v1: &[f32; 1536], v2: &[f32; 1536]) -> f32 {
+        (1.0 - v1
+            .iter()
+            .zip(v2.iter())
+            .map(|(f1, f2)| f1 * f2)
+            .sum::<f32>())
+            / 2.0
+    }
+
     use std::{
         ops::Deref,
         sync::{Arc, RwLock, RwLockReadGuard},
@@ -199,10 +208,12 @@ mod tests {
 
     use rand::{rngs::StdRng, SeedableRng};
 
-    use crate::{bigvec::random_normed_vec, AbstractVector, Comparator, VectorId};
-
-    use super::{QuantizedHnsw, VectorSelector, VectorStore};
+    use crate::{
+        bigvec::random_normed_vec, pq::QuantizedHnsw, AbstractVector, Comparator, VectorId,
+    };
     use rayon::prelude::*;
+
+    use super::{VectorSelector, VectorStore};
 
     struct ReadLockedVec<'a, T> {
         lock: RwLockReadGuard<'a, Vec<T>>,
@@ -277,11 +288,11 @@ mod tests {
                 .iter()
                 .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter())
                 .collect();
-            let mut ar1 = [0.0_f32; 32];
-            let mut ar2 = [0.0_f32; 32];
+            let mut ar1 = [0.0_f32; 1536];
+            let mut ar2 = [0.0_f32; 1536];
             ar1.copy_from_slice(&v_reconstruct1);
             ar2.copy_from_slice(&v_reconstruct2);
-            cosine32(&ar1, &ar2)
+            cosine1536(&ar1, &ar2)
         }
     }
 
