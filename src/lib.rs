@@ -570,6 +570,14 @@ impl<C: Comparator + 'static> Hnsw<C> {
         self.get_layer(0).map(|l| l.node_count()).unwrap_or(0)
     }
 
+    pub fn neighborhood_size(&self) -> usize {
+        self.neighborhood_size
+    }
+
+    pub fn zero_neighborhood_size(&self) -> usize {
+        self.zero_layer_neighborhood_size
+    }
+
     pub fn get_layer(&self, i: usize) -> Option<&Layer<C>> {
         self.get_layer_from_top(self.layers.len() - i - 1)
     }
