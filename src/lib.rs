@@ -859,6 +859,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         &self,
         threshold: f32,
         probe_depth: usize,
+        initial_search_depth: usize,
     ) -> impl IndexedParallelIterator<Item = (VectorId, Vec<(VectorId, f32)>)> + '_ {
         let layer = &self.layers[self.layers.len() - 1];
         let nodes = &layer.nodes;
@@ -866,8 +867,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         nodes.par_iter().enumerate().map(move |(i, v)| {
             let node = NodeId(i);
             let abstract_vector = AbstractVector::Stored(*v);
-            let mut k = layer.neighborhood_size;
-            let mut pq = PriorityQueue::new(k);
+            let mut pq = PriorityQueue::new(initial_search_depth);
             pq.merge_pairs(&[(node, 0.0)]);
             let mut last = 0.0;
             let mut last_size = 0;
@@ -2127,7 +2127,9 @@ mod tests {
     #[test]
     fn test_threshold_nn() {
         let hnsw: Hnsw<SillyComparator> = make_simple_hnsw();
-        let mut results: Vec<_> = hnsw.threshold_nn(0.3, 1).collect();
+        let mut results: Vec<_> = hnsw
+            .threshold_nn(0.3, 1, hnsw.zero_layer_neighborhood_size)
+            .collect();
         results.sort_by_key(|(v, _d)| *v);
         assert_eq!(
             results,
