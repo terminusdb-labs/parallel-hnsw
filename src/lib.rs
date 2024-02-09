@@ -1146,8 +1146,12 @@ impl<C: Comparator + 'static> Hnsw<C> {
             .map(|local_node| {
                 let mut count = 0;
                 let vector = pseudo_layer.get_vector(local_node);
-                let matches =
-                    search::search_layers(AbstractVector::Stored(vector), 300, &pseudo_stack, 1);
+                let matches = search::search_layers(
+                    AbstractVector::Stored(vector),
+                    self.neighborhood_size,
+                    &pseudo_stack,
+                    1,
+                );
                 for (neighbor_vec, distance) in matches.into_iter().take(10) {
                     if neighbor_vec == vector {
                         break;
