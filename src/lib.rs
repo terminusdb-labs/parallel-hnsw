@@ -570,6 +570,14 @@ impl<C: Comparator + 'static> Hnsw<C> {
         self.get_layer(0).map(|l| l.node_count()).unwrap_or(0)
     }
 
+    pub fn neighborhood_size(&self) -> usize {
+        self.neighborhood_size
+    }
+
+    pub fn zero_neighborhood_size(&self) -> usize {
+        self.zero_layer_neighborhood_size
+    }
+
     pub fn get_layer(&self, i: usize) -> Option<&Layer<C>> {
         self.get_layer_from_top(self.layers.len() - i - 1)
     }
@@ -855,6 +863,40 @@ impl<C: Comparator + 'static> Hnsw<C> {
         })
     }
 
+    pub fn threshold_nn(
+        &self,
+        threshold: f32,
+        probe_depth: usize,
+        initial_search_depth: usize,
+    ) -> impl IndexedParallelIterator<Item = (VectorId, Vec<(VectorId, f32)>)> + '_ {
+        let layer = &self.layers[self.layers.len() - 1];
+        let nodes = &layer.nodes;
+
+        nodes.par_iter().enumerate().map(move |(i, v)| {
+            let node = NodeId(i);
+            let abstract_vector = AbstractVector::Stored(*v);
+            let mut pq = PriorityQueue::new(initial_search_depth);
+            pq.merge_pairs(&[(node, 0.0)]);
+            let mut last = 0.0;
+            let mut last_size = 0;
+            while last < threshold && pq.len() > last_size {
+                last_size = pq.len();
+                layer.closest_nodes(abstract_vector.clone(), &mut pq, probe_depth);
+                last = pq.last().expect("should have at least retrieved self").1;
+                if last < threshold && pq.len() == pq.capacity() {
+                    pq.resize_capacity(pq.capacity() * 2);
+                }
+            }
+            let distances: Vec<_> = pq
+                .iter()
+                .filter(|(n, _)| *n != node)
+                .take_while(|(n, distance)| *distance < threshold)
+                .map(|(node_id, distance)| (layer.get_vector(node_id), distance))
+                .collect();
+            (*v, distances)
+        })
+    }
+
     pub fn par_all_vectors(&self) -> impl ParallelIterator<Item = VectorId> + '_ {
         self.get_layer(0).unwrap().nodes.par_iter().cloned()
     }
@@ -1112,8 +1154,12 @@ impl<C: Comparator + 'static> Hnsw<C> {
             .map(|local_node| {
                 let mut count = 0;
                 let vector = pseudo_layer.get_vector(local_node);
-                let matches =
-                    search::search_layers(AbstractVector::Stored(vector), 300, &pseudo_stack, 1);
+                let matches = search::search_layers(
+                    AbstractVector::Stored(vector),
+                    self.neighborhood_size,
+                    &pseudo_stack,
+                    1,
+                );
                 for (neighbor_vec, distance) in matches.into_iter().take(10) {
                     if neighbor_vec == vector {
                         break;
@@ -1348,12 +1394,12 @@ impl<C: Comparator + 'static> Hnsw<C> {
     pub fn improve_neighbors(&mut self, threshold: f32) {
         let mut last_recall = 0.0_f32;
         let mut last_improvement = 1.0_f32;
-        while last_improvement >= threshold {
+        while last_improvement >= threshold && last_recall != 1.0 {
             for layer_id_from_top in 0..self.layer_count() {
                 let count = self.improve_neighborhoods_at_layer(layer_id_from_top);
                 eprintln!("layer {layer_id_from_top}: improved {count}");
             }
-            let recall = self.stochastic_recall(1000);
+            let recall = self.stochastic_recall(100);
             last_improvement = recall - last_recall;
             last_recall = recall;
             eprintln!("recall {recall} (improvement: {last_improvement})");
@@ -2082,6 +2128,49 @@ mod tests {
                 (VectorId(6), vec![(VectorId(0), 1.0)]),
                 (VectorId(7), vec![(VectorId(0), 1.0)]),
                 (VectorId(8), vec![(VectorId(4), 0.1835745)])
+            ]
+        );
+    }
+
+    #[test]
+    fn test_threshold_nn() {
+        let hnsw: Hnsw<SillyComparator> = make_simple_hnsw();
+        let mut results: Vec<_> = hnsw
+            .threshold_nn(0.3, 1, hnsw.zero_layer_neighborhood_size)
+            .collect();
+        results.sort_by_key(|(v, _d)| *v);
+        assert_eq!(
+            results,
+            vec![
+                (VectorId(0), vec![(VectorId(3), 0.29289323)]),
+                (
+                    VectorId(1),
+                    vec![(VectorId(3), 0.29289323), (VectorId(8), 0.29289323)],
+                ),
+                (VectorId(2), vec![(VectorId(8), 0.29289323)]),
+                (
+                    VectorId(3),
+                    vec![
+                        (VectorId(4), 0.1835745),
+                        (VectorId(0), 0.29289323),
+                        (VectorId(1), 0.29289323),
+                    ],
+                ),
+                (
+                    VectorId(4),
+                    vec![(VectorId(3), 0.1835745), (VectorId(8), 0.1835745)],
+                ),
+                (VectorId(5), vec![]),
+                (VectorId(6), vec![]),
+                (VectorId(7), vec![]),
+                (
+                    VectorId(8),
+                    vec![
+                        (VectorId(4), 0.1835745),
+                        (VectorId(1), 0.29289323),
+                        (VectorId(2), 0.29289323),
+                    ],
+                ),
             ]
         );
     }
