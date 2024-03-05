@@ -1,5 +1,5 @@
 pub mod bigvec;
-mod pq;
+pub mod pq;
 mod priority_queue;
 mod search;
 pub mod serialize;
