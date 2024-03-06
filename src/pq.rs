@@ -148,6 +148,7 @@ impl<
             .into_shape(number_of_clusters * CENTROID_SIZE)
             .unwrap()
             .to_vec();
+        eprintln!("centroid flat len: {}", centroid_flat.len());
         let centroids: Vec<[f32; CENTROID_SIZE]> = centroid_flat
             .chunks(CENTROID_SIZE)
             .map(|v| {
