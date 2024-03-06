@@ -1,9 +1,12 @@
-use crate::{AbstractVector, Comparator, Hnsw, VectorId};
+use std::path::PathBuf;
+
+use crate::{AbstractVector, Comparator, Hnsw, Serializable, VectorId};
 use linfa::traits::Fit;
 use linfa::DatasetBase;
 use linfa_clustering::KMeans;
 use ndarray::{Array, Array1, Array2};
 use rand::{rngs::StdRng, SeedableRng};
+use rayon::iter::IndexedParallelIterator;
 
 trait Quantizer<const SIZE: usize, const QUANTIZED_SIZE: usize> {
     fn quantize(&self, vec: &[f32; SIZE]) -> [u16; QUANTIZED_SIZE];
@@ -45,6 +48,32 @@ impl<
             slice.copy_from_slice(&*centroid);
         }
         result
+    }
+}
+
+impl<
+        const SIZE: usize,
+        const CENTROID_SIZE: usize,
+        const QUANTIZED_SIZE: usize,
+        ComparatorParams,
+        C: 'static + Comparator<T = [f32; CENTROID_SIZE]> + Serializable<Params = ComparatorParams>,
+    > Serializable for HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
+{
+    type Params = ComparatorParams;
+
+    fn serialize<P: AsRef<std::path::Path>>(
+        &self,
+        path: P,
+    ) -> Result<(), crate::SerializationError> {
+        self.hnsw.serialize(path)
+    }
+
+    fn deserialize<P: AsRef<std::path::Path>>(
+        path: P,
+        params: Self::Params,
+    ) -> Result<Self, crate::SerializationError> {
+        let hnsw = Hnsw::deserialize(path, params)?.unwrap();
+        Ok(Self { hnsw })
     }
 }
 
@@ -187,6 +216,79 @@ impl<
         );
         // TODO reorder
         result
+    }
+}
+
+impl<
+        const SIZE: usize,
+        const CENTROID_SIZE: usize,
+        const QUANTIZED_SIZE: usize,
+        ComparatorParams,
+        CentroidComparator: Comparator<T = [f32; CENTROID_SIZE]>
+            + VectorStore<T = [f32; CENTROID_SIZE]>
+            + Serializable<Params = ()>
+            + 'static,
+        QuantizedComparator: Comparator<T = [u16; QUANTIZED_SIZE]>
+            + VectorStore<T = [u16; QUANTIZED_SIZE]>
+            + Serializable<Params = ()>
+            + 'static,
+        FullComparator: Comparator<T = [f32; SIZE]>
+            + VectorSelector<T = [f32; SIZE]>
+            + Serializable<Params = ComparatorParams>
+            + 'static,
+    > Serializable
+    for QuantizedHnsw<
+        SIZE,
+        CENTROID_SIZE,
+        QUANTIZED_SIZE,
+        CentroidComparator,
+        QuantizedComparator,
+        FullComparator,
+    >
+{
+    type Params = ComparatorParams;
+
+    fn serialize<P: AsRef<std::path::Path>>(
+        &self,
+        path: P,
+    ) -> Result<(), crate::SerializationError> {
+        let path_buf: PathBuf = path.as_ref().into();
+
+        let quantizer_path = path_buf.join("quantizer");
+        eprintln!("serializing quantizer");
+        self.quantizer.serialize(quantizer_path)?;
+
+        let hnsw_path = path_buf.join("hnsw");
+        eprintln!("serializing quantizer");
+        self.hnsw.serialize(hnsw_path)?;
+
+        let comparator_path = path_buf.join("comparator");
+        eprintln!("serializing quantizer");
+        self.comparator.serialize(comparator_path)?;
+
+        Ok(())
+    }
+
+    fn deserialize<P: AsRef<std::path::Path>>(
+        path: P,
+        params: Self::Params,
+    ) -> Result<Self, crate::SerializationError> {
+        let path_buf: PathBuf = path.as_ref().into();
+
+        let quantizer_path = path_buf.join("quantizer");
+        let quantizer = HnswQuantizer::deserialize(quantizer_path, ())?;
+
+        let hnsw_path = path_buf.join("hnsw");
+        let hnsw = Hnsw::deserialize(hnsw_path, ())?.unwrap();
+
+        let comparator_path = path_buf.join("comparator");
+        let comparator = FullComparator::deserialize(comparator_path, params)?;
+
+        Ok(Self {
+            quantizer,
+            hnsw,
+            comparator,
+        })
     }
 }
 
