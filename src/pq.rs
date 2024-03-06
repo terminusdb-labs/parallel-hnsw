@@ -7,6 +7,7 @@ use linfa_clustering::KMeans;
 use ndarray::{Array, Array1, Array2};
 use rand::{rngs::StdRng, SeedableRng};
 use rayon::iter::IndexedParallelIterator;
+use rayon::prelude::*;
 
 trait Quantizer<const SIZE: usize, const QUANTIZED_SIZE: usize> {
     fn quantize(&self, vec: &[f32; SIZE]) -> [u16; QUANTIZED_SIZE];
@@ -180,12 +181,13 @@ impl<
             hnsw: centroid_hnsw,
         };
         let mut vids: Vec<VectorId> = Vec::new();
-        eprintln!("centroiding");
+        eprintln!("quantizing");
         for chunk in comparator.vector_chunks() {
-            let mut quantized = Vec::new();
-            for v in chunk {
-                quantized.push(centroid_quantizer.quantize(&v));
-            }
+            let quantized: Vec<_> = chunk
+                .into_par_iter()
+                .map(|v| centroid_quantizer.quantize(&v))
+                .collect();
+
             vids.extend(quantized_comparator.store(Box::new(quantized.into_iter())));
         }
         let m = 24;
