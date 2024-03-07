@@ -136,7 +136,7 @@ impl<
         eprintln!("sub_arrays: {sub_arrays:?}");
         let observations = DatasetBase::from(sub_arrays);
         // TODO review this number
-        let number_of_clusters = selection_size;
+        let number_of_clusters = 10_000;
         let prng = StdRng::seed_from_u64(42);
         eprintln!("Running kmeans");
         let model = KMeans::params_with_rng(number_of_clusters, prng.clone())
@@ -144,6 +144,7 @@ impl<
             .fit(&observations)
             .expect("KMeans fitted");
         let centroid_array: Array2<f32> = model.centroids().clone();
+        centroid_array.len();
         let centroid_flat: Vec<f32> = centroid_array
             .into_shape(number_of_clusters * CENTROID_SIZE)
             .unwrap()
