@@ -1752,6 +1752,10 @@ fn calculate_partitions_for_additions(
 #[cfg(test)]
 mod tests {
 
+    use std::sync::Arc;
+
+    use rand_distr::Uniform;
+
     use super::bigvec::*;
     use super::*;
     type SillyVec = [f32; 3];
@@ -2173,5 +2177,45 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    pub type Vec32 = Vec<f32>;
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct Comparator32 {
+        pub data: Arc<Vec<Vec32>>,
+    }
+
+    impl Comparator for Comparator32 {
+        type T = BigVec;
+        type Borrowable<'a> = &'a BigVec;
+        fn compare_raw(&self, v1: &BigVec, v2: &BigVec) -> f32 {
+            let mut result = 0.0;
+            for (&f1, &f2) in v1.iter().zip(v2.iter()) {
+                result += (f1 - f2).powi(2)
+            }
+            result.powf(0.5)
+        }
+        fn lookup(&self, v: VectorId) -> &BigVec {
+            &self.data[v.0]
+        }
+    }
+
+    pub fn random_vec(prng: &mut StdRng, size: usize) -> Vec<f32> {
+        let range = Uniform::from(-1.0..1.0);
+        let vec: Vec<f32> = prng.sample_iter(&range).take(size).collect();
+        vec
+    }
+
+    #[test]
+    fn test_euclidean() {
+        let mut prng = StdRng::seed_from_u64(42);
+        let vecs: Vec<Vec<f32>> = (0..10_000)
+            .map(move |_| random_vec(&mut prng, 32))
+            .collect();
+        let cc = Comparator32 { data: vecs.into() };
+        let vids: Vec<VectorId> = (0..10_000).map(VectorId).collect();
+        let mut hnsw: Hnsw<Comparator32> = Hnsw::generate(cc, vids, 24, 48, 12);
+        hnsw.improve_neighbors(0.01);
+        panic!()
     }
 }
