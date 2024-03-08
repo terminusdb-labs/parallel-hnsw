@@ -106,7 +106,10 @@ impl<
         const SIZE: usize,
         const CENTROID_SIZE: usize,
         const QUANTIZED_SIZE: usize,
-        CentroidComparator: Comparator<T = [f32; CENTROID_SIZE]> + VectorStore<T = [f32; CENTROID_SIZE]> + 'static,
+        CentroidComparator: Comparator<T = [f32; CENTROID_SIZE]>
+            + VectorStore<T = [f32; CENTROID_SIZE]>
+            + Serializable
+            + 'static,
         QuantizedComparator: Comparator<T = [u16; QUANTIZED_SIZE]> + VectorStore<T = [u16; QUANTIZED_SIZE]> + 'static,
         FullComparator: Comparator<T = [f32; SIZE]> + VectorSelector<T = [f32; SIZE]> + 'static,
     >
@@ -136,7 +139,7 @@ impl<
         eprintln!("sub_arrays: {sub_arrays:?}");
         let observations = DatasetBase::from(sub_arrays);
         // TODO review this number
-        let number_of_clusters = 10_000;
+        let number_of_clusters = 1_000;
         let prng = StdRng::seed_from_u64(42);
         eprintln!("Running kmeans");
         let model = KMeans::params_with_rng(number_of_clusters, prng.clone())
@@ -174,6 +177,7 @@ impl<
         );
         //centroid_hnsw.improve_index();
         centroid_hnsw.improve_neighbors(0.01);
+        centroid_hnsw.serialize("pq.test").unwrap();
         let centroid_quantizer: HnswQuantizer<
             SIZE,
             CENTROID_SIZE,
