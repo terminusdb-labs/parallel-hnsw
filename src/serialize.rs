@@ -63,6 +63,7 @@ pub fn serialize_hnsw<C: Comparator + Serializable, P: AsRef<Path>>(
         let mut hnsw_comparator: PathBuf = path.as_ref().into();
         hnsw_comparator.push("comparator");
         layers[0].comparator.serialize(hnsw_comparator)?;
+        eprintln!("serializing comparator");
     }
 
     for (i, layer) in layers.iter().enumerate().take(layer_count) {

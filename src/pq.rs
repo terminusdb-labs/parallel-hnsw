@@ -139,7 +139,7 @@ impl<
         eprintln!("sub_arrays: {sub_arrays:?}");
         let observations = DatasetBase::from(sub_arrays);
         // TODO review this number
-        let number_of_clusters = 1_000;
+        let number_of_clusters = 5_000;
         let prng = StdRng::seed_from_u64(42);
         eprintln!("Running kmeans");
         let model = KMeans::params_with_rng(number_of_clusters, prng.clone())
@@ -267,11 +267,11 @@ impl<
         self.quantizer.serialize(quantizer_path)?;
 
         let hnsw_path = path_buf.join("hnsw");
-        eprintln!("serializing quantizer");
+        eprintln!("serializing hnsw");
         self.hnsw.serialize(hnsw_path)?;
 
         let comparator_path = path_buf.join("comparator");
-        eprintln!("serializing quantizer");
+        eprintln!("serializing comparator");
         self.comparator.serialize(comparator_path)?;
 
         Ok(())
@@ -287,7 +287,7 @@ impl<
         let quantizer = HnswQuantizer::deserialize(quantizer_path, ())?;
 
         let hnsw_path = path_buf.join("hnsw");
-        let hnsw = Hnsw::deserialize(hnsw_path, ())?.unwrap();
+        let hnsw: Hnsw<QuantizedComparator> = Hnsw::deserialize(hnsw_path, ())?.unwrap();
 
         let comparator_path = path_buf.join("comparator");
         let comparator = FullComparator::deserialize(comparator_path, params)?;
