@@ -176,7 +176,7 @@ impl<
             centroid_order,
         );
         //centroid_hnsw.improve_index();
-        centroid_hnsw.improve_neighbors(0.01);
+        centroid_hnsw.improve_neighbors(0.01, 1.0);
         centroid_hnsw.serialize("pq.test").unwrap();
         let centroid_quantizer: HnswQuantizer<
             SIZE,

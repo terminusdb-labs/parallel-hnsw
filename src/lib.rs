@@ -1339,24 +1339,28 @@ impl<C: Comparator + 'static> Hnsw<C> {
         (vecs, layer_from_top)
     }
 
-    pub fn stochastic_recall(&self, divisor: usize) -> f32 {
+    pub fn stochastic_recall(&self, recall_proportion: f32) -> f32 {
         let mut rng = StdRng::seed_from_u64(42);
         let total = self.len();
-        let selection = usize::max(1, total / divisor);
-        let mut seen = HashSet::new();
-        let vecs_to_find: Vec<VectorId> = (0..selection)
-            .map(|_| {
-                let vid: VectorId;
-                loop {
-                    let v = VectorId(rng.gen_range(0..total));
-                    if seen.insert(v) {
-                        vid = v;
-                        break;
+        let selection = usize::max(1, (total as f32 * recall_proportion) as usize);
+        let vecs_to_find: Vec<VectorId> = if selection == total {
+            (0..total).map(VectorId).collect()
+        } else {
+            let mut seen = HashSet::new();
+            (0..selection)
+                .map(|_| {
+                    let vid: VectorId;
+                    loop {
+                        let v = VectorId(rng.gen_range(0..total));
+                        if seen.insert(v) {
+                            vid = v;
+                            break;
+                        }
                     }
-                }
-                vid
-            })
-            .collect();
+                    vid
+                })
+                .collect()
+        };
         let relevant: usize = vecs_to_find
             .par_iter()
             .filter(|vid| {
@@ -1391,7 +1395,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         total_relevant as f32 / total as f32
     }
 
-    pub fn improve_neighbors(&mut self, threshold: f32) {
+    pub fn improve_neighbors(&mut self, threshold: f32, recall_proportion: f32) {
         let mut last_recall = 0.0_f32;
         let mut last_improvement = 1.0_f32;
         while last_improvement >= threshold && last_recall != 1.0 {
@@ -1399,7 +1403,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 let count = self.improve_neighborhoods_at_layer(layer_id_from_top);
                 eprintln!("layer {layer_id_from_top}: improved {count}");
             }
-            let recall = self.stochastic_recall(100);
+            let recall = self.stochastic_recall(recall_proportion);
             last_improvement = recall - last_recall;
             last_recall = recall;
             eprintln!("recall {recall} (improvement: {last_improvement})");
