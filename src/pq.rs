@@ -9,7 +9,7 @@ use rand::{rngs::StdRng, SeedableRng};
 use rayon::iter::IndexedParallelIterator;
 use rayon::prelude::*;
 
-trait Quantizer<const SIZE: usize, const QUANTIZED_SIZE: usize> {
+pub trait Quantizer<const SIZE: usize, const QUANTIZED_SIZE: usize> {
     fn quantize(&self, vec: &[f32; SIZE]) -> [u16; QUANTIZED_SIZE];
     fn reconstruct(&self, qvec: &[u16; QUANTIZED_SIZE]) -> [f32; SIZE];
 }
@@ -21,6 +21,17 @@ pub struct HnswQuantizer<
     C: Comparator<T = [f32; CENTROID_SIZE]>,
 > {
     hnsw: Hnsw<C>,
+}
+impl<
+        const SIZE: usize,
+        const CENTROID_SIZE: usize,
+        const QUANTIZED_SIZE: usize,
+        C: 'static + Comparator<T = [f32; CENTROID_SIZE]>,
+    > HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
+{
+    pub fn comparator(&self) -> &C {
+        self.hnsw.comparator()
+    }
 }
 
 impl<
@@ -211,6 +222,24 @@ impl<
 
     pub fn vector_count(&self) -> usize {
         self.hnsw.vector_count()
+    }
+
+    pub fn quantizer(
+        &self,
+    ) -> &HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, CentroidComparator> {
+        &self.quantizer
+    }
+
+    pub fn centroid_comparator(&self) -> &CentroidComparator {
+        self.quantizer.comparator()
+    }
+
+    pub fn quantized_comparator(&self) -> &QuantizedComparator {
+        self.hnsw.comparator()
+    }
+
+    pub fn full_comparator(&self) -> &FullComparator {
+        &self.comparator
     }
 
     pub fn search(
