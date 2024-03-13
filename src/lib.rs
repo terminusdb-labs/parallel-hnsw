@@ -1489,7 +1489,7 @@ impl<C: Comparator + Serializable> Hnsw<C> {
     pub fn deserialize<P: AsRef<Path>>(
         path: P,
         params: C::Params,
-    ) -> Result<Option<Self>, SerializationError> {
+    ) -> Result<Self, SerializationError> {
         serialize::deserialize_hnsw(path, params)
     }
 }

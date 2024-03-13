@@ -73,7 +73,7 @@ impl<
         path: P,
         params: Self::Params,
     ) -> Result<Self, crate::SerializationError> {
-        let hnsw = Hnsw::deserialize(path, params)?.unwrap();
+        let hnsw = Hnsw::deserialize(path, params)?;
         Ok(Self { hnsw })
     }
 }
@@ -209,6 +209,10 @@ impl<
         }
     }
 
+    pub fn vector_count(&self) -> usize {
+        self.hnsw.vector_count()
+    }
+
     pub fn search(
         &self,
         v: AbstractVector<[f32; SIZE]>,
@@ -226,8 +230,21 @@ impl<
         result
     }
 
-    pub fn improve_neighbors(&mut self, threshold: f32, proportion: f32) {
-        self.hnsw.improve_neighbors(threshold, proportion);
+    pub fn improve_neighbors(&mut self, threshold: f32, recall_proportion: f32) {
+        self.hnsw.improve_neighbors(threshold, recall_proportion)
+    }
+
+    pub fn zero_neighborhood_size(&self) -> usize {
+        self.hnsw.zero_neighborhood_size()
+    }
+    pub fn threshold_nn(
+        &self,
+        threshold: f32,
+        probe_depth: usize,
+        initial_search_depth: usize,
+    ) -> impl IndexedParallelIterator<Item = (VectorId, Vec<(VectorId, f32)>)> + '_ {
+        self.hnsw
+            .threshold_nn(threshold, probe_depth, initial_search_depth)
     }
 }
 
@@ -291,7 +308,7 @@ impl<
         let quantizer = HnswQuantizer::deserialize(quantizer_path, ())?;
 
         let hnsw_path = path_buf.join("hnsw");
-        let hnsw: Hnsw<QuantizedComparator> = Hnsw::deserialize(hnsw_path, ())?.unwrap();
+        let hnsw: Hnsw<QuantizedComparator> = Hnsw::deserialize(hnsw_path, ())?;
 
         let comparator_path = path_buf.join("comparator");
         let comparator = FullComparator::deserialize(comparator_path, params)?;
