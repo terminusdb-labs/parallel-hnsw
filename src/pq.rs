@@ -159,7 +159,7 @@ impl<
         eprintln!("sub_arrays: {sub_arrays:?}");
         let observations = DatasetBase::from(sub_arrays);
         // TODO review this number
-        let number_of_clusters = 1_000;
+        let number_of_clusters = usize::min(sub_length, 1_000);
         let prng = StdRng::seed_from_u64(42);
         eprintln!("Running kmeans");
         let model = KMeans::params_with_rng(number_of_clusters, prng.clone())
