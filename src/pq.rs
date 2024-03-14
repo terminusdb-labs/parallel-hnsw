@@ -4,7 +4,7 @@ use crate::{AbstractVector, Comparator, Hnsw, Serializable, VectorId};
 use linfa::traits::Fit;
 use linfa::DatasetBase;
 use linfa_clustering::KMeans;
-use ndarray::{Array, Array1, Array2};
+use ndarray::{Array, Array2};
 use rand::{rngs::StdRng, SeedableRng};
 use rayon::iter::IndexedParallelIterator;
 use rayon::prelude::*;
@@ -123,10 +123,7 @@ impl<
         const SIZE: usize,
         const CENTROID_SIZE: usize,
         const QUANTIZED_SIZE: usize,
-        CentroidComparator: Comparator<T = [f32; CENTROID_SIZE]>
-            + VectorStore<T = [f32; CENTROID_SIZE]>
-            + Serializable
-            + 'static,
+        CentroidComparator: Comparator<T = [f32; CENTROID_SIZE]> + VectorStore<T = [f32; CENTROID_SIZE]> + 'static,
         QuantizedComparator: Comparator<T = [u16; QUANTIZED_SIZE]>
             + VectorStore<T = [u16; QUANTIZED_SIZE]>
             + PartialDistance
@@ -407,7 +404,7 @@ mod tests {
     };
     use rayon::prelude::*;
 
-    use super::{VectorSelector, VectorStore};
+    use super::{PartialDistance, VectorSelector, VectorStore};
 
     struct ReadLockedVec<'a, T> {
         lock: RwLockReadGuard<'a, Vec<T>>,
@@ -461,6 +458,12 @@ mod tests {
     struct QuantizedComparator32 {
         cc: CentroidComparator32,
         data: Arc<RwLock<Vec<[u16; 48]>>>,
+    }
+
+    impl PartialDistance for QuantizedComparator32 {
+        fn partial_distance(&self, i: u16, j: u16) -> f32 {
+            todo!()
+        }
     }
 
     impl Comparator for QuantizedComparator32 {
