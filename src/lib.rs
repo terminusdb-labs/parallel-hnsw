@@ -2219,7 +2219,7 @@ mod tests {
         let cc = Comparator32 { data: vecs.into() };
         let vids: Vec<VectorId> = (0..10_000).map(VectorId).collect();
         let mut hnsw: Hnsw<Comparator32> = Hnsw::generate(cc, vids, 24, 48, 12);
-        hnsw.improve_neighbors(0.01);
+        hnsw.improve_neighbors(0.01, 1.0);
         panic!()
     }
 }
