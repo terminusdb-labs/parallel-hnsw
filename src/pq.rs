@@ -14,6 +14,11 @@ pub trait Quantizer<const SIZE: usize, const QUANTIZED_SIZE: usize> {
     fn reconstruct(&self, qvec: &[u16; QUANTIZED_SIZE]) -> [f32; SIZE];
 }
 
+pub trait PartialDistance {
+    // A partial distance must be a sumable component
+    fn partial_distance(&self, i: u16, j: u16) -> f32;
+}
+
 pub struct HnswQuantizer<
     const SIZE: usize,
     const CENTROID_SIZE: usize,
@@ -22,6 +27,7 @@ pub struct HnswQuantizer<
 > {
     hnsw: Hnsw<C>,
 }
+
 impl<
         const SIZE: usize,
         const CENTROID_SIZE: usize,
@@ -94,7 +100,7 @@ pub struct QuantizedHnsw<
     const CENTROID_SIZE: usize,
     const QUANTIZED_SIZE: usize,
     CentroidComparator: Comparator<T = [f32; CENTROID_SIZE]> + 'static + VectorStore<T = [f32; CENTROID_SIZE]>,
-    QuantizedComparator: Comparator<T = [u16; QUANTIZED_SIZE]> + 'static,
+    QuantizedComparator: Comparator<T = [u16; QUANTIZED_SIZE]> + 'static + PartialDistance,
     FullComparator: Comparator<T = [f32; SIZE]> + VectorSelector<T = [f32; SIZE]> + 'static,
 > {
     quantizer: HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, CentroidComparator>,
@@ -121,7 +127,10 @@ impl<
             + VectorStore<T = [f32; CENTROID_SIZE]>
             + Serializable
             + 'static,
-        QuantizedComparator: Comparator<T = [u16; QUANTIZED_SIZE]> + VectorStore<T = [u16; QUANTIZED_SIZE]> + 'static,
+        QuantizedComparator: Comparator<T = [u16; QUANTIZED_SIZE]>
+            + VectorStore<T = [u16; QUANTIZED_SIZE]>
+            + PartialDistance
+            + 'static,
         FullComparator: Comparator<T = [f32; SIZE]> + VectorSelector<T = [f32; SIZE]> + 'static,
     >
     QuantizedHnsw<
@@ -288,6 +297,7 @@ impl<
             + 'static,
         QuantizedComparator: Comparator<T = [u16; QUANTIZED_SIZE]>
             + VectorStore<T = [u16; QUANTIZED_SIZE]>
+            + PartialDistance
             + Serializable<Params = ()>
             + 'static,
         FullComparator: Comparator<T = [f32; SIZE]>
