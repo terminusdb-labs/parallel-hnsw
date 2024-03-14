@@ -20,7 +20,7 @@ use std::{
 };
 
 use itertools::Itertools;
-use rand::{rngs::StdRng, seq::SliceRandom, thread_rng, Rng, SeedableRng};
+use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 use rand_distr::{Distribution, Exp};
 use rayon::prelude::*;
 use std::fmt::Debug;
@@ -890,7 +890,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
             let distances: Vec<_> = pq
                 .iter()
                 .filter(|(n, _)| *n != node)
-                .take_while(|(n, distance)| *distance < threshold)
+                .take_while(|(_n, distance)| *distance < threshold)
                 .map(|(node_id, distance)| (layer.get_vector(node_id), distance))
                 .collect();
             (*v, distances)

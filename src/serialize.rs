@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::{mem, slice};
 use thiserror::Error;
 
-use crate::pq::{QuantizedHnsw, VectorSelector, VectorStore};
 use crate::{Comparator, Hnsw, Layer, NodeId, Serializable, VectorId};
 
 #[derive(Error, Debug)]

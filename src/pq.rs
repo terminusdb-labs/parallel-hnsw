@@ -360,6 +360,7 @@ impl<
     }
 }
 
+#[cfg(test)]
 mod tests {
     fn clamp_01(f: f32) -> f32 {
         if f <= 0.0 {
@@ -394,18 +395,19 @@ mod tests {
         )
     }
 
+    use ndarray::Array2;
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+    use rayon::iter::IntoParallelIterator;
+    use rayon::iter::ParallelIterator;
     use std::{
         ops::Deref,
         sync::{Arc, RwLock, RwLockReadGuard},
     };
 
-    use ndarray::Array2;
-    use rand::{rngs::StdRng, SeedableRng};
-
     use crate::{
         bigvec::random_normed_vec, pq::QuantizedHnsw, AbstractVector, Comparator, VectorId,
     };
-    use rayon::prelude::*;
 
     use super::{PartialDistance, VectorSelector, VectorStore};
 
@@ -464,7 +466,7 @@ mod tests {
     }
 
     impl PartialDistance for QuantizedComparator32 {
-        fn partial_distance(&self, i: u16, j: u16) -> f32 {
+        fn partial_distance(&self, _i: u16, _j: u16) -> f32 {
             todo!()
         }
     }
