@@ -154,7 +154,7 @@ impl<
             .into_iter()
             .flat_map(|v| v.into_iter())
             .collect();
-        let sub_length = selection_size * SIZE / CENTROID_SIZE;
+        let sub_length = data.len() / CENTROID_SIZE;
         let sub_arrays = Array::from_shape_vec((sub_length, CENTROID_SIZE), data).unwrap();
         eprintln!("sub_arrays: {sub_arrays:?}");
         let observations = DatasetBase::from(sub_arrays);
