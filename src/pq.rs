@@ -281,6 +281,9 @@ impl<
         self.hnsw
             .threshold_nn(threshold, probe_depth, initial_search_depth)
     }
+    pub fn stochastic_recall(&self, recall_proportion: f32) -> f32 {
+        self.hnsw.stochastic_recall(recall_proportion)
+    }
 }
 
 impl<
