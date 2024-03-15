@@ -116,7 +116,7 @@ pub trait VectorSelector {
 
 pub trait VectorStore {
     type T;
-    fn store(&self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId>;
+    fn store(&mut self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId>;
 }
 
 impl<
@@ -141,8 +141,8 @@ impl<
 {
     pub fn new(
         selection_size: usize,
-        centroid_comparator: CentroidComparator,
-        quantized_comparator: QuantizedComparator,
+        mut centroid_comparator: CentroidComparator,
+        mut quantized_comparator: QuantizedComparator,
         comparator: FullComparator,
     ) -> Self {
         let vector_selection = comparator.selection(selection_size);
