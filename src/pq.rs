@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::{AbstractVector, Comparator, Hnsw, Serializable, VectorId};
+use crate::{AbstractVector, Comparator, Hnsw, OrderedFloat, Serializable, VectorId};
 use linfa::traits::Fit;
 use linfa::DatasetBase;
 use linfa_clustering::KMeans;
@@ -254,15 +254,23 @@ impl<
         number_of_candidates: usize,
         probe_depth: usize,
     ) -> Vec<(VectorId, f32)> {
-        let raw_v = self.comparator.lookup_abstract(v);
+        let raw_v = self.comparator.lookup_abstract(v.clone());
         let quantized = self.quantizer.quantize(&raw_v);
         let result = self.hnsw.search(
             AbstractVector::Unstored(&quantized),
             number_of_candidates,
             probe_depth,
         );
+        let mut reordered = Vec::with_capacity(result.len());
+        for (id, _) in result {
+            let dist = self
+                .full_comparator()
+                .compare_vec(AbstractVector::Stored(id), v.clone());
+            reordered.push((id, dist))
+        }
+        reordered.sort_by_key(|(vid, d)| (OrderedFloat(*d), *vid));
         // TODO reorder
-        result
+        reordered
     }
 
     pub fn improve_neighbors(&mut self, threshold: f32, recall_proportion: f32) {
