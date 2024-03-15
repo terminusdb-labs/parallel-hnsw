@@ -409,7 +409,7 @@ mod tests {
         bigvec::random_normed_vec, pq::QuantizedHnsw, AbstractVector, Comparator, VectorId,
     };
 
-    use super::{PartialDistance, VectorSelector, VectorStore};
+    use super::*;
 
     struct ReadLockedVec<'a, T> {
         lock: RwLockReadGuard<'a, Vec<T>>,
@@ -650,13 +650,12 @@ mod tests {
                 .iter()
                 .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter())
                 .collect();
-            (v_reconstruct1
+            v_reconstruct1
                 .iter()
                 .zip(v_reconstruct2.iter())
-                .map(|(f1, f2)| f1 * f2)
+                .map(|(f1, f2)| (f1 - f2).powi(2))
                 .sum::<f32>()
-                - 1.0)
-                / -2.0
+                .sqrt()
         }
     }
 
@@ -778,17 +777,35 @@ mod tests {
         let fc = Comparator16 {
             data: Arc::new(RwLock::new(vecs.clone())),
         };
-        let mut hnsw: QuantizedHnsw<16, 4, 4, _, _, _> = QuantizedHnsw::new(100, cc, qc, fc);
+        let mut hnsw: QuantizedHnsw<16, 4, 4, _, _, _> =
+            QuantizedHnsw::new(100, cc, qc.clone(), fc);
         hnsw.improve_neighbors(0.01, 1.0);
+
+        // Test last vector individually
+        let raw_vec = vecs.last().unwrap();
+        eprintln!("raw_vec: {raw_vec:?}");
+        let quant_vec = hnsw.quantizer.quantize(raw_vec);
+        eprintln!("quant_vec: {quant_vec:?}");
+        let recon_vec = hnsw.quantizer.reconstruct(&quant_vec);
+        eprintln!("recon_vec: {recon_vec:?}");
+        let lvid = VectorId(vecs.len() - 1);
+        let internal_quantized = *qc.lookup(lvid);
+        eprintln!("internal quant: {internal_quantized:?}");
+        let av = AbstractVector::Unstored(raw_vec);
+        let res = hnsw.search(av, 10, 2);
+        eprintln!("Match results: {res:?}");
+
         let mut matches = 0;
         let mut match_sum = 0.0;
         for (i, v) in vecs.iter().enumerate() {
             let av = AbstractVector::Unstored(v);
-            let res = hnsw.search(av, 10, 2);
+            let res = hnsw.search(av, 30, 2);
             if let Some((matchvid, match_distance)) = res.first() {
                 if i == matchvid.0 {
                     matches += 1;
                     match_sum += match_distance;
+                } else {
+                    eprintln!("Match result for {i:?} {res:?}");
                 }
             }
         }
