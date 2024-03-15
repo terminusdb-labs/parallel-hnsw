@@ -6,7 +6,6 @@ use linfa::DatasetBase;
 use linfa_clustering::KMeans;
 use ndarray::{Array, Array2};
 use rand::{rngs::StdRng, SeedableRng};
-use rayon::iter::IndexedParallelIterator;
 use rayon::prelude::*;
 
 pub trait Quantizer<const SIZE: usize, const QUANTIZED_SIZE: usize> {
