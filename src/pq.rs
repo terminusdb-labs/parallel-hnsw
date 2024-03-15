@@ -256,7 +256,6 @@ impl<
     ) -> Vec<(VectorId, f32)> {
         let raw_v = self.comparator.lookup_abstract(v);
         let quantized = self.quantizer.quantize(&raw_v);
-        eprintln!("{quantized:?}");
         let result = self.hnsw.search(
             AbstractVector::Unstored(&quantized),
             number_of_candidates,
@@ -567,6 +566,154 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct Comparator16 {
+        data: Arc<RwLock<Vec<[f32; 16]>>>,
+    }
+
+    impl Comparator for Comparator16 {
+        type T = [f32; 16];
+        type Borrowable<'a> = ReadLockedVec<'a, Self::T>;
+        fn lookup(&self, v: crate::VectorId) -> Self::Borrowable<'_> {
+            ReadLockedVec {
+                lock: self.data.read().unwrap(),
+                id: v,
+            }
+        }
+
+        fn compare_raw(&self, _v1: &Self::T, _v2: &Self::T) -> f32 {
+            todo!()
+        }
+    }
+
+    impl VectorStore for Comparator16 {
+        type T = <Comparator16 as Comparator>::T;
+
+        fn store(&self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
+            let mut data = self.data.write().unwrap();
+            let vid = data.len();
+            let mut vectors: Vec<VectorId> = Vec::new();
+            data.extend(i.enumerate().map(|(i, v)| {
+                vectors.push(VectorId(vid + i));
+                v
+            }));
+            vectors
+        }
+    }
+
+    impl VectorSelector for Comparator16 {
+        type T = <Comparator16 as Comparator>::T;
+
+        fn selection(&self, size: usize) -> Vec<Self::T> {
+            self.data
+                .read()
+                .unwrap()
+                .iter()
+                .cloned()
+                .take(size)
+                .collect()
+        }
+
+        fn vector_chunks(&self) -> impl Iterator<Item = Vec<Self::T>> {
+            vec![self.data.read().unwrap().clone()].into_iter()
+        }
+    }
+
+    #[derive(Clone)]
+    struct QuantizedComparator4 {
+        cc: CentroidComparator4,
+        data: Arc<RwLock<Vec<[u16; 4]>>>,
+    }
+
+    impl PartialDistance for QuantizedComparator4 {
+        fn partial_distance(&self, _i: u16, _j: u16) -> f32 {
+            todo!()
+        }
+    }
+
+    impl Comparator for QuantizedComparator4 {
+        type T = [u16; 4];
+        type Borrowable<'a> = ReadLockedVec<'a, Self::T>;
+        fn lookup(&self, v: crate::VectorId) -> Self::Borrowable<'_> {
+            ReadLockedVec {
+                lock: self.data.read().unwrap(),
+                id: v,
+            }
+        }
+
+        fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
+            let v_reconstruct1: Vec<f32> = v1
+                .iter()
+                .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter())
+                .collect();
+            let v_reconstruct2: Vec<f32> = v2
+                .iter()
+                .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter())
+                .collect();
+            (v_reconstruct1
+                .iter()
+                .zip(v_reconstruct2.iter())
+                .map(|(f1, f2)| f1 * f2)
+                .sum::<f32>()
+                - 1.0)
+                / -2.0
+        }
+    }
+
+    impl VectorStore for QuantizedComparator4 {
+        type T = <QuantizedComparator4 as Comparator>::T;
+
+        fn store(&self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
+            let mut data = self.data.write().unwrap();
+            let vid = data.len();
+            let mut vectors: Vec<VectorId> = Vec::new();
+            data.extend(i.enumerate().map(|(i, v)| {
+                vectors.push(VectorId(vid + i));
+                v
+            }));
+            vectors
+        }
+    }
+
+    #[derive(Clone)]
+    struct CentroidComparator4 {
+        data: Arc<RwLock<Vec<[f32; 4]>>>,
+    }
+
+    impl Comparator for CentroidComparator4 {
+        type T = [f32; 4];
+        type Borrowable<'a> = ReadLockedVec<'a, Self::T>;
+        fn lookup(&self, v: crate::VectorId) -> Self::Borrowable<'_> {
+            ReadLockedVec {
+                lock: self.data.read().unwrap(),
+                id: v,
+            }
+        }
+
+        fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
+            v1.iter()
+                .zip(v2.iter())
+                .map(|(f1, f2)| (f1 - f2).powi(2))
+                .sum::<f32>()
+                .sqrt()
+        }
+    }
+
+    impl VectorStore for CentroidComparator4 {
+        type T = <CentroidComparator4 as Comparator>::T;
+
+        fn store(&self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
+            let mut data = self.data.write().unwrap();
+            let vid = data.len();
+            let mut vectors: Vec<VectorId> = Vec::new();
+            data.extend(i.enumerate().map(|(i, v)| {
+                vectors.push(VectorId(vid + i));
+                v
+            }));
+            vectors
+        }
+    }
+
     #[test]
     fn test_arrays() {
         let a = Array2::from_shape_vec((2, 3), vec![0, 1, 2, 3, 4, 5]).unwrap();
@@ -580,7 +727,7 @@ mod tests {
 
     #[test]
     fn test_pq() {
-        let count = 100;
+        let count = 10;
         let vecs: Vec<[f32; 1536]> = (0..count)
             .into_par_iter()
             .map(move |i| {
@@ -605,6 +752,50 @@ mod tests {
         let v = AbstractVector::Unstored(&vecs[0]);
         let res = hnsw.search(v, 10, 2);
         eprintln!("res: {res:?}");
+        panic!();
+    }
+
+    #[test]
+    fn test_small_pq() {
+        let count = 10000;
+        let vecs: Vec<[f32; 16]> = (0..count)
+            .into_par_iter()
+            .map(move |i| {
+                let mut prng = StdRng::seed_from_u64(42_u64 + i as u64);
+                let mut arr = [0.0_f32; 16];
+                let v = random_normed_vec(&mut prng, 16);
+                arr.copy_from_slice(&v);
+                arr
+            })
+            .collect();
+        let cc = CentroidComparator4 {
+            data: Arc::new(RwLock::new(Vec::new())),
+        };
+        let qc = QuantizedComparator4 {
+            cc: cc.clone(),
+            data: Arc::new(RwLock::new(Vec::new())),
+        };
+        let fc = Comparator16 {
+            data: Arc::new(RwLock::new(vecs.clone())),
+        };
+        let mut hnsw: QuantizedHnsw<16, 4, 4, _, _, _> = QuantizedHnsw::new(100, cc, qc, fc);
+        hnsw.improve_neighbors(0.01, 1.0);
+        let mut matches = 0;
+        let mut match_sum = 0.0;
+        for (i, v) in vecs.iter().enumerate() {
+            let av = AbstractVector::Unstored(v);
+            let res = hnsw.search(av, 10, 2);
+            if let Some((matchvid, match_distance)) = res.first() {
+                if i == matchvid.0 {
+                    matches += 1;
+                    match_sum += match_distance;
+                }
+            }
+        }
+        let recall = matches as f32 / vecs.len() as f32;
+        eprintln!("recall: {recall}");
+        let match_avg = match_sum / vecs.len() as f32;
+        eprintln!("average match distance: {match_avg}");
         panic!();
     }
 }
