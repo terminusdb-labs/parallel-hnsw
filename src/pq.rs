@@ -401,19 +401,12 @@ mod tests {
         )
     }
 
-    use ndarray::Array2;
-    use rand::rngs::StdRng;
-    use rand::SeedableRng;
-    use rayon::iter::IntoParallelIterator;
-    use rayon::iter::ParallelIterator;
     use std::{
         ops::Deref,
         sync::{Arc, RwLock, RwLockReadGuard},
     };
 
-    use crate::{
-        bigvec::random_normed_vec, pq::QuantizedHnsw, AbstractVector, Comparator, VectorId,
-    };
+    use crate::bigvec::random_normed_vec;
 
     use super::*;
 
@@ -432,17 +425,14 @@ mod tests {
 
     #[derive(Clone)]
     struct CentroidComparator32 {
-        data: Arc<RwLock<Vec<[f32; 32]>>>,
+        data: Arc<Vec<[f32; 32]>>,
     }
 
     impl Comparator for CentroidComparator32 {
         type T = [f32; 32];
-        type Borrowable<'a> = ReadLockedVec<'a, Self::T>;
+        type Borrowable<'a> = &'a Self::T;
         fn lookup(&self, v: crate::VectorId) -> Self::Borrowable<'_> {
-            ReadLockedVec {
-                lock: self.data.read().unwrap(),
-                id: v,
-            }
+            &self.data[v.0]
         }
 
         fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
@@ -450,18 +440,11 @@ mod tests {
         }
     }
 
-    impl VectorStore for CentroidComparator32 {
-        type T = <CentroidComparator32 as Comparator>::T;
-
-        fn store(&self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
-            let mut data = self.data.write().unwrap();
-            let vid = data.len();
-            let mut vectors: Vec<VectorId> = Vec::new();
-            data.extend(i.enumerate().map(|(i, v)| {
-                vectors.push(VectorId(vid + i));
-                v
-            }));
-            vectors
+    impl CentroidComparatorConstructor for CentroidComparator32 {
+        fn new(centroids: Vec<Self::T>) -> Self {
+            Self {
+                data: Arc::new(centroids),
+            }
         }
     }
 
@@ -490,11 +473,11 @@ mod tests {
         fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
             let v_reconstruct1: Vec<f32> = v1
                 .iter()
-                .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter())
+                .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter().copied())
                 .collect();
             let v_reconstruct2: Vec<f32> = v2
                 .iter()
-                .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter())
+                .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter().copied())
                 .collect();
             let mut ar1 = [0.0_f32; 1536];
             let mut ar2 = [0.0_f32; 1536];
@@ -504,10 +487,21 @@ mod tests {
         }
     }
 
+    impl QuantizedComparatorConstructor for QuantizedComparator32 {
+        type CentroidComparator = CentroidComparator32;
+
+        fn new(cc: &Self::CentroidComparator) -> Self {
+            Self {
+                cc: cc.clone(),
+                data: Default::default(),
+            }
+        }
+    }
+
     impl VectorStore for QuantizedComparator32 {
         type T = <QuantizedComparator32 as Comparator>::T;
 
-        fn store(&self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
+        fn store(&mut self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
             let mut data = self.data.write().unwrap();
             let vid = data.len();
             let mut vectors: Vec<VectorId> = Vec::new();
@@ -542,7 +536,7 @@ mod tests {
     impl VectorStore for AIComparator {
         type T = <AIComparator as Comparator>::T;
 
-        fn store(&self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
+        fn store(&mut self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
             let mut data = self.data.write().unwrap();
             let vid = data.len();
             let mut vectors: Vec<VectorId> = Vec::new();
@@ -595,7 +589,7 @@ mod tests {
     impl VectorStore for Comparator16 {
         type T = <Comparator16 as Comparator>::T;
 
-        fn store(&self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
+        fn store(&mut self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
             let mut data = self.data.write().unwrap();
             let vid = data.len();
             let mut vectors: Vec<VectorId> = Vec::new();
@@ -631,6 +625,17 @@ mod tests {
         data: Arc<RwLock<Vec<[u16; 4]>>>,
     }
 
+    impl QuantizedComparatorConstructor for QuantizedComparator4 {
+        type CentroidComparator = CentroidComparator4;
+
+        fn new(cc: &Self::CentroidComparator) -> Self {
+            Self {
+                cc: cc.clone(),
+                data: Default::default(),
+            }
+        }
+    }
+
     impl PartialDistance for QuantizedComparator4 {
         fn partial_distance(&self, _i: u16, _j: u16) -> f32 {
             todo!()
@@ -650,11 +655,11 @@ mod tests {
         fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
             let v_reconstruct1: Vec<f32> = v1
                 .iter()
-                .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter())
+                .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter().copied())
                 .collect();
             let v_reconstruct2: Vec<f32> = v2
                 .iter()
-                .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter())
+                .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter().copied())
                 .collect();
             v_reconstruct1
                 .iter()
@@ -668,7 +673,7 @@ mod tests {
     impl VectorStore for QuantizedComparator4 {
         type T = <QuantizedComparator4 as Comparator>::T;
 
-        fn store(&self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
+        fn store(&mut self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
             let mut data = self.data.write().unwrap();
             let vid = data.len();
             let mut vectors: Vec<VectorId> = Vec::new();
@@ -682,17 +687,22 @@ mod tests {
 
     #[derive(Clone)]
     struct CentroidComparator4 {
-        data: Arc<RwLock<Vec<[f32; 4]>>>,
+        data: Arc<Vec<[f32; 4]>>,
+    }
+
+    impl CentroidComparatorConstructor for CentroidComparator4 {
+        fn new(centroids: Vec<Self::T>) -> Self {
+            Self {
+                data: Arc::new(centroids),
+            }
+        }
     }
 
     impl Comparator for CentroidComparator4 {
         type T = [f32; 4];
-        type Borrowable<'a> = ReadLockedVec<'a, Self::T>;
+        type Borrowable<'a> = &'a Self::T;
         fn lookup(&self, v: crate::VectorId) -> Self::Borrowable<'_> {
-            ReadLockedVec {
-                lock: self.data.read().unwrap(),
-                id: v,
-            }
+            &self.data[v.0]
         }
 
         fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
@@ -701,21 +711,6 @@ mod tests {
                 .map(|(f1, f2)| (f1 - f2).powi(2))
                 .sum::<f32>()
                 .sqrt()
-        }
-    }
-
-    impl VectorStore for CentroidComparator4 {
-        type T = <CentroidComparator4 as Comparator>::T;
-
-        fn store(&self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
-            let mut data = self.data.write().unwrap();
-            let vid = data.len();
-            let mut vectors: Vec<VectorId> = Vec::new();
-            data.extend(i.enumerate().map(|(i, v)| {
-                vectors.push(VectorId(vid + i));
-                v
-            }));
-            vectors
         }
     }
 
@@ -743,17 +738,11 @@ mod tests {
                 arr
             })
             .collect();
-        let cc = CentroidComparator32 {
-            data: Arc::new(RwLock::new(Vec::new())),
-        };
-        let qc = QuantizedComparator32 {
-            cc: cc.clone(),
-            data: Arc::new(RwLock::new(Vec::new())),
-        };
         let fc = AIComparator {
             data: Arc::new(RwLock::new(vecs.clone())),
         };
-        let hnsw: QuantizedHnsw<1536, 32, 48, _, _, _> = QuantizedHnsw::new(100, cc, qc, fc);
+        let hnsw: QuantizedHnsw<1536, 32, 48, CentroidComparator32, QuantizedComparator32, _> =
+            QuantizedHnsw::new(100, fc);
         let v = AbstractVector::Unstored(&vecs[0]);
         let res = hnsw.search(v, 10, 2);
         eprintln!("res: {res:?}");
@@ -773,18 +762,11 @@ mod tests {
                 arr
             })
             .collect();
-        let cc = CentroidComparator4 {
-            data: Arc::new(RwLock::new(Vec::new())),
-        };
-        let qc = QuantizedComparator4 {
-            cc: cc.clone(),
-            data: Arc::new(RwLock::new(Vec::new())),
-        };
         let fc = Comparator16 {
             data: Arc::new(RwLock::new(vecs.clone())),
         };
-        let mut hnsw: QuantizedHnsw<16, 4, 4, _, _, _> =
-            QuantizedHnsw::new(100, cc, qc.clone(), fc);
+        let mut hnsw: QuantizedHnsw<16, 4, 4, CentroidComparator4, QuantizedComparator4, _> =
+            QuantizedHnsw::new(100, fc);
         hnsw.improve_neighbors(0.01, 1.0);
 
         // Test last vector individually
@@ -795,7 +777,7 @@ mod tests {
         let recon_vec = hnsw.quantizer.reconstruct(&quant_vec);
         eprintln!("recon_vec: {recon_vec:?}");
         let lvid = VectorId(vecs.len() - 1);
-        let internal_quantized = *qc.lookup(lvid);
+        let internal_quantized = *hnsw.quantized_comparator().lookup(lvid);
         eprintln!("internal quant: {internal_quantized:?}");
         let av = AbstractVector::Unstored(raw_vec);
         let res = hnsw.search(av, 10, 2);
