@@ -22,7 +22,7 @@ pub struct HnswQuantizer<
     const SIZE: usize,
     const CENTROID_SIZE: usize,
     const QUANTIZED_SIZE: usize,
-    C: Comparator<T = [f32; CENTROID_SIZE]>,
+    C,
 > {
     hnsw: Hnsw<C>,
 }
@@ -73,7 +73,7 @@ impl<
         const CENTROID_SIZE: usize,
         const QUANTIZED_SIZE: usize,
         ComparatorParams,
-        C: 'static + Comparator<T = [f32; CENTROID_SIZE]> + Serializable<Params = ComparatorParams>,
+        C: 'static + Serializable<Params = ComparatorParams> + Clone + Sync,
     > Serializable for HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
 {
     type Params = ComparatorParams;
@@ -98,9 +98,9 @@ pub struct QuantizedHnsw<
     const SIZE: usize,
     const CENTROID_SIZE: usize,
     const QUANTIZED_SIZE: usize,
-    CentroidComparator: Comparator<T = [f32; CENTROID_SIZE]> + 'static + VectorStore<T = [f32; CENTROID_SIZE]>,
-    QuantizedComparator: Comparator<T = [u16; QUANTIZED_SIZE]> + 'static + PartialDistance,
-    FullComparator: Comparator<T = [f32; SIZE]> + VectorSelector<T = [f32; SIZE]> + 'static,
+    CentroidComparator,
+    QuantizedComparator,
+    FullComparator,
 > {
     quantizer: HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, CentroidComparator>,
     hnsw: Hnsw<QuantizedComparator>,
@@ -118,14 +118,25 @@ pub trait VectorStore {
     fn store(&mut self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId>;
 }
 
+pub trait CentroidComparatorConstructor: Comparator {
+    fn new(centroids: Vec<Self::T>) -> Self;
+}
+
+pub trait QuantizedComparatorConstructor: Comparator {
+    type CentroidComparator: Comparator;
+
+    fn new(cc: &Self::CentroidComparator) -> Self;
+}
+
 impl<
         const SIZE: usize,
         const CENTROID_SIZE: usize,
         const QUANTIZED_SIZE: usize,
-        CentroidComparator: Comparator<T = [f32; CENTROID_SIZE]> + VectorStore<T = [f32; CENTROID_SIZE]> + 'static,
+        CentroidComparator: Comparator<T = [f32; CENTROID_SIZE]> + CentroidComparatorConstructor + 'static,
         QuantizedComparator: Comparator<T = [u16; QUANTIZED_SIZE]>
             + VectorStore<T = [u16; QUANTIZED_SIZE]>
             + PartialDistance
+            + QuantizedComparatorConstructor<CentroidComparator = CentroidComparator>
             + 'static,
         FullComparator: Comparator<T = [f32; SIZE]> + VectorSelector<T = [f32; SIZE]> + 'static,
     >
@@ -138,12 +149,7 @@ impl<
         FullComparator,
     >
 {
-    pub fn new(
-        selection_size: usize,
-        mut centroid_comparator: CentroidComparator,
-        mut quantized_comparator: QuantizedComparator,
-        comparator: FullComparator,
-    ) -> Self {
+    pub fn new(selection_size: usize, comparator: FullComparator) -> Self {
         let vector_selection = comparator.selection(selection_size);
         // Linfa
         let data: Vec<f32> = vector_selection
@@ -180,10 +186,12 @@ impl<
         //
         eprintln!("Number of centroids: {}", centroids.len());
 
-        let vector_ids = centroid_comparator.store(Box::new(centroids.into_iter()));
+        let vector_ids = (0..centroids.len()).map(VectorId).collect();
+        let centroid_comparator = CentroidComparator::new(centroids);
         let centroid_m = 24;
         let centroid_m0 = 48;
         let centroid_order = 12;
+        let mut quantized_comparator = QuantizedComparator::new(&centroid_comparator);
         let mut centroid_hnsw: Hnsw<CentroidComparator> = Hnsw::generate(
             centroid_comparator,
             vector_ids,
@@ -212,6 +220,7 @@ impl<
 
             vids.extend(quantized_comparator.store(Box::new(quantized.into_iter())));
         }
+
         let m = 24;
         let m0 = 48;
         let order = 12;
@@ -298,19 +307,9 @@ impl<
         const CENTROID_SIZE: usize,
         const QUANTIZED_SIZE: usize,
         ComparatorParams,
-        CentroidComparator: Comparator<T = [f32; CENTROID_SIZE]>
-            + VectorStore<T = [f32; CENTROID_SIZE]>
-            + Serializable<Params = ()>
-            + 'static,
-        QuantizedComparator: Comparator<T = [u16; QUANTIZED_SIZE]>
-            + VectorStore<T = [u16; QUANTIZED_SIZE]>
-            + PartialDistance
-            + Serializable<Params = ()>
-            + 'static,
-        FullComparator: Comparator<T = [f32; SIZE]>
-            + VectorSelector<T = [f32; SIZE]>
-            + Serializable<Params = ComparatorParams>
-            + 'static,
+        CentroidComparator: Serializable<Params = ()> + Clone + Sync + 'static,
+        QuantizedComparator: Serializable<Params = ()> + Clone + 'static,
+        FullComparator: Serializable<Params = ComparatorParams> + 'static,
     > Serializable
     for QuantizedHnsw<
         SIZE,

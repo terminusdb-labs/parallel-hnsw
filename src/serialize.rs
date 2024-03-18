@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::{mem, slice};
 use thiserror::Error;
 
-use crate::{Comparator, Hnsw, Layer, NodeId, Serializable, VectorId};
+use crate::{Hnsw, Layer, NodeId, Serializable, VectorId};
 
 #[derive(Error, Debug)]
 pub enum SerializationError {
@@ -31,7 +31,7 @@ pub struct HNSWMeta {
     pub order: usize,
 }
 
-pub fn serialize_hnsw<C: Comparator + Serializable, P: AsRef<Path>>(
+pub fn serialize_hnsw<C: Serializable, P: AsRef<Path>>(
     neighborhood_size: usize,
     zero_layer_neighborhood_size: usize,
     order: usize,
@@ -124,7 +124,7 @@ pub fn serialize_hnsw<C: Comparator + Serializable, P: AsRef<Path>>(
     Ok(())
 }
 
-pub fn deserialize_hnsw<C: Comparator + Serializable, P: AsRef<Path>>(
+pub fn deserialize_hnsw<C: Serializable + Clone, P: AsRef<Path>>(
     path: P,
     params: C::Params,
 ) -> Result<Hnsw<C>, SerializationError> {

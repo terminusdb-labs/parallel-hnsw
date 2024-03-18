@@ -46,7 +46,7 @@ impl<'a, T: ?Sized, Borrowable: Deref<Target = T> + 'a> Deref
 }
 
 pub trait Comparator: Sync + Clone {
-    type T: ?Sized;
+    type T;
     type Borrowable<'a>: Deref<Target = Self::T>
     where
         Self: 'a;
@@ -78,7 +78,7 @@ pub trait Serializable: Sized {
 }
 
 #[derive(PartialEq, PartialOrd, Debug)]
-pub struct Layer<C: Comparator> {
+pub struct Layer<C> {
     pub comparator: C,
     pub neighborhood_size: usize,
     pub nodes: Vec<VectorId>,
@@ -558,7 +558,7 @@ impl NodeDistance {
 }
 
 #[derive(PartialEq, PartialOrd, Debug)]
-pub struct Hnsw<C: Comparator> {
+pub struct Hnsw<C> {
     pub layers: Vec<Layer<C>>,
     order: usize,
     neighborhood_size: usize,
@@ -1475,7 +1475,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
     }
 }
 
-impl<C: Comparator + Serializable> Hnsw<C> {
+impl<C: Serializable + Clone> Hnsw<C> {
     pub fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
         serialize::serialize_hnsw(
             self.neighborhood_size,
