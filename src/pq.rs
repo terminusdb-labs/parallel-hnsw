@@ -34,6 +34,10 @@ impl<
         C: 'static + Comparator<T = [f32; CENTROID_SIZE]>,
     > HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
 {
+    pub fn new(hnsw: Hnsw<C>) -> Self {
+        Self { hnsw }
+    }
+
     pub fn comparator(&self) -> &C {
         self.hnsw.comparator()
     }
