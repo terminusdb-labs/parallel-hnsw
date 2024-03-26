@@ -73,7 +73,7 @@ pub trait Serializable: Sized {
     fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError>;
     fn deserialize<P: AsRef<Path>>(
         path: P,
-        params: Self::Params,
+        params: &Self::Params,
     ) -> Result<Self, SerializationError>;
 }
 
@@ -1488,7 +1488,7 @@ impl<C: Serializable + Clone> Hnsw<C> {
 
     pub fn deserialize<P: AsRef<Path>>(
         path: P,
-        params: C::Params,
+        params: &C::Params,
     ) -> Result<Self, SerializationError> {
         serialize::deserialize_hnsw(path, params)
     }

@@ -126,7 +126,7 @@ pub fn serialize_hnsw<C: Serializable, P: AsRef<Path>>(
 
 pub fn deserialize_hnsw<C: Serializable + Clone, P: AsRef<Path>>(
     path: P,
-    params: C::Params,
+    params: &C::Params,
 ) -> Result<Hnsw<C>, SerializationError> {
     let mut hnsw_meta: PathBuf = path.as_ref().into();
     hnsw_meta.push("meta");

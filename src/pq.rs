@@ -1,11 +1,6 @@
 use std::path::PathBuf;
 
 use crate::{AbstractVector, Comparator, Hnsw, OrderedFloat, Serializable, VectorId};
-use linfa::traits::Fit;
-use linfa::DatasetBase;
-use linfa_clustering::KMeans;
-use ndarray::{Array, Array2};
-use rand::{rngs::StdRng, SeedableRng};
 use rayon::prelude::*;
 
 pub trait Quantizer<const SIZE: usize, const QUANTIZED_SIZE: usize> {
@@ -35,6 +30,7 @@ impl<
     > HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
 {
     pub fn new(hnsw: Hnsw<C>) -> Self {
+        assert_eq!(SIZE, CENTROID_SIZE * QUANTIZED_SIZE);
         Self { hnsw }
     }
 
@@ -77,7 +73,7 @@ impl<
         const CENTROID_SIZE: usize,
         const QUANTIZED_SIZE: usize,
         ComparatorParams,
-        C: 'static + Serializable<Params = ComparatorParams> + Clone + Sync,
+        C: 'static + Serializable<Params = ComparatorParams> + Clone,
     > Serializable for HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
 {
     type Params = ComparatorParams;
@@ -91,7 +87,7 @@ impl<
 
     fn deserialize<P: AsRef<std::path::Path>>(
         path: P,
-        params: Self::Params,
+        params: &Self::Params,
     ) -> Result<Self, crate::SerializationError> {
         let hnsw = Hnsw::deserialize(path, params)?;
         Ok(Self { hnsw })
@@ -102,139 +98,40 @@ pub struct QuantizedHnsw<
     const SIZE: usize,
     const CENTROID_SIZE: usize,
     const QUANTIZED_SIZE: usize,
-    CentroidComparator,
     QuantizedComparator,
     FullComparator,
+    Q,
 > {
-    quantizer: HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, CentroidComparator>,
+    quantizer: Q,
     hnsw: Hnsw<QuantizedComparator>,
     comparator: FullComparator,
-}
-
-pub trait VectorSelector {
-    type T;
-    fn selection(&self, size: usize) -> Vec<Self::T>;
-    fn vector_chunks(&self) -> impl Iterator<Item = Vec<Self::T>>;
-}
-
-pub trait VectorStore {
-    type T;
-    fn store(&mut self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId>;
-}
-
-pub trait CentroidComparatorConstructor: Comparator {
-    fn new(centroids: Vec<Self::T>) -> Self;
-}
-
-pub trait QuantizedComparatorConstructor: Comparator {
-    type CentroidComparator: Comparator;
-
-    fn new(cc: &Self::CentroidComparator) -> Self;
 }
 
 impl<
         const SIZE: usize,
         const CENTROID_SIZE: usize,
         const QUANTIZED_SIZE: usize,
-        CentroidComparator: Comparator<T = [f32; CENTROID_SIZE]> + CentroidComparatorConstructor + 'static,
-        QuantizedComparator: Comparator<T = [u16; QUANTIZED_SIZE]>
-            + VectorStore<T = [u16; QUANTIZED_SIZE]>
-            + PartialDistance
-            + QuantizedComparatorConstructor<CentroidComparator = CentroidComparator>
-            + 'static,
-        FullComparator: Comparator<T = [f32; SIZE]> + VectorSelector<T = [f32; SIZE]> + 'static,
-    >
-    QuantizedHnsw<
-        SIZE,
-        CENTROID_SIZE,
-        QUANTIZED_SIZE,
-        CentroidComparator,
-        QuantizedComparator,
-        FullComparator,
-    >
+        QuantizedComparator: Comparator<T = [u16; QUANTIZED_SIZE]> + PartialDistance + 'static,
+        FullComparator: Comparator<T = [f32; SIZE]> + 'static,
+        Q: Quantizer<SIZE, QUANTIZED_SIZE> + 'static,
+    > QuantizedHnsw<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, QuantizedComparator, FullComparator, Q>
 {
-    pub fn new(selection_size: usize, comparator: FullComparator) -> Self {
-        let vector_selection = comparator.selection(selection_size);
-        // Linfa
-        let data: Vec<f32> = vector_selection
-            .into_iter()
-            .flat_map(|v| v.into_iter())
-            .collect();
-        let sub_length = data.len() / CENTROID_SIZE;
-        let sub_arrays = Array::from_shape_vec((sub_length, CENTROID_SIZE), data).unwrap();
-        eprintln!("sub_arrays: {sub_arrays:?}");
-        let observations = DatasetBase::from(sub_arrays);
-        // TODO review this number
-        let number_of_clusters = usize::min(sub_length, 1_000);
-        let prng = StdRng::seed_from_u64(42);
-        eprintln!("Running kmeans");
-        let model = KMeans::params_with_rng(number_of_clusters, prng.clone())
-            .tolerance(1e-2)
-            .fit(&observations)
-            .expect("KMeans fitted");
-        let centroid_array: Array2<f32> = model.centroids().clone();
-        centroid_array.len();
-        let centroid_flat: Vec<f32> = centroid_array
-            .into_shape(number_of_clusters * CENTROID_SIZE)
-            .unwrap()
-            .to_vec();
-        eprintln!("centroid flat len: {}", centroid_flat.len());
-        let centroids: Vec<[f32; CENTROID_SIZE]> = centroid_flat
-            .chunks(CENTROID_SIZE)
-            .map(|v| {
-                let mut array = [0.0; CENTROID_SIZE];
-                array.copy_from_slice(v);
-                array
-            })
-            .collect();
-        //
-        eprintln!("Number of centroids: {}", centroids.len());
-
-        let vector_ids = (0..centroids.len()).map(VectorId).collect();
-        let centroid_comparator = CentroidComparator::new(centroids);
-        let centroid_m = 24;
-        let centroid_m0 = 48;
-        let centroid_order = 12;
-        let mut quantized_comparator = QuantizedComparator::new(&centroid_comparator);
-        let mut centroid_hnsw: Hnsw<CentroidComparator> = Hnsw::generate(
-            centroid_comparator,
-            vector_ids,
-            centroid_m,
-            centroid_m0,
-            centroid_order,
-        );
-        //centroid_hnsw.improve_index();
-        centroid_hnsw.improve_neighbors(0.01, 1.0);
-
-        let centroid_quantizer: HnswQuantizer<
-            SIZE,
-            CENTROID_SIZE,
-            QUANTIZED_SIZE,
-            CentroidComparator,
-        > = HnswQuantizer {
-            hnsw: centroid_hnsw,
-        };
-        let mut vids: Vec<VectorId> = Vec::new();
-        eprintln!("quantizing");
-        for chunk in comparator.vector_chunks() {
-            let quantized: Vec<_> = chunk
-                .into_par_iter()
-                .map(|v| centroid_quantizer.quantize(&v))
-                .collect();
-
-            vids.extend(quantized_comparator.store(Box::new(quantized.into_iter())));
-        }
-
+    pub fn generate(
+        quantizer: Q,
+        quantized_comparator: QuantizedComparator,
+        full_comparator: FullComparator,
+        vs: Vec<VectorId>,
+    ) -> Self {
         let m = 24;
         let m0 = 48;
         let order = 12;
-        eprintln!("generating");
+
         let hnsw: Hnsw<QuantizedComparator> =
-            Hnsw::generate(quantized_comparator, vids, m, m0, order);
+            Hnsw::generate(quantized_comparator, vs, m, m0, order);
         Self {
-            quantizer: centroid_quantizer,
+            quantizer,
             hnsw,
-            comparator,
+            comparator: full_comparator,
         }
     }
 
@@ -242,14 +139,8 @@ impl<
         self.hnsw.vector_count()
     }
 
-    pub fn quantizer(
-        &self,
-    ) -> &HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, CentroidComparator> {
+    pub fn quantizer(&self) -> &Q {
         &self.quantizer
-    }
-
-    pub fn centroid_comparator(&self) -> &CentroidComparator {
-        self.quantizer.comparator()
     }
 
     pub fn quantized_comparator(&self) -> &QuantizedComparator {
@@ -311,20 +202,14 @@ impl<
         const CENTROID_SIZE: usize,
         const QUANTIZED_SIZE: usize,
         ComparatorParams,
-        CentroidComparator: Serializable<Params = ()> + Clone + Sync + 'static,
-        QuantizedComparator: Serializable<Params = ()> + Clone + 'static,
+        QuantizedComparator: Serializable<Params = ComparatorParams> + Clone + 'static,
         FullComparator: Serializable<Params = ComparatorParams> + 'static,
+        QuantizerParams,
+        Q: Serializable<Params = QuantizerParams> + 'static,
     > Serializable
-    for QuantizedHnsw<
-        SIZE,
-        CENTROID_SIZE,
-        QUANTIZED_SIZE,
-        CentroidComparator,
-        QuantizedComparator,
-        FullComparator,
-    >
+    for QuantizedHnsw<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, QuantizedComparator, FullComparator, Q>
 {
-    type Params = ComparatorParams;
+    type Params = (QuantizerParams, ComparatorParams);
 
     fn serialize<P: AsRef<std::path::Path>>(
         &self,
@@ -349,18 +234,18 @@ impl<
 
     fn deserialize<P: AsRef<std::path::Path>>(
         path: P,
-        params: Self::Params,
+        params: &Self::Params,
     ) -> Result<Self, crate::SerializationError> {
         let path_buf: PathBuf = path.as_ref().into();
 
         let quantizer_path = path_buf.join("quantizer");
-        let quantizer = HnswQuantizer::deserialize(quantizer_path, ())?;
+        let quantizer = Q::deserialize(quantizer_path, &params.0)?;
 
         let hnsw_path = path_buf.join("hnsw");
-        let hnsw: Hnsw<QuantizedComparator> = Hnsw::deserialize(hnsw_path, ())?;
+        let hnsw: Hnsw<QuantizedComparator> = Hnsw::deserialize(hnsw_path, &params.1)?;
 
         let comparator_path = path_buf.join("comparator");
-        let comparator = FullComparator::deserialize(comparator_path, params)?;
+        let comparator = FullComparator::deserialize(comparator_path, &params.1)?;
 
         Ok(Self {
             quantizer,
@@ -746,7 +631,7 @@ mod tests {
             data: Arc::new(RwLock::new(vecs.clone())),
         };
         let hnsw: QuantizedHnsw<1536, 32, 48, CentroidComparator32, QuantizedComparator32, _> =
-            QuantizedHnsw::new(100, fc);
+            QuantizedHnsw::generate(100, fc);
         let v = AbstractVector::Unstored(&vecs[0]);
         let res = hnsw.search(v, 10, 2);
         eprintln!("res: {res:?}");
@@ -770,7 +655,7 @@ mod tests {
             data: Arc::new(RwLock::new(vecs.clone())),
         };
         let mut hnsw: QuantizedHnsw<16, 4, 4, CentroidComparator4, QuantizedComparator4, _> =
-            QuantizedHnsw::new(100, fc);
+            QuantizedHnsw::generate(100, fc);
         hnsw.improve_neighbors(0.01, 1.0);
 
         // Test last vector individually
