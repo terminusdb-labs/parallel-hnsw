@@ -154,7 +154,11 @@ impl<
         FullComparator,
     >
 {
-    pub fn new(selection_size: usize, comparator: FullComparator) -> Self {
+    pub fn new(
+        selection_size: usize,
+        number_of_cnetroids: usize,
+        comparator: FullComparator,
+    ) -> Self {
         let vector_selection = comparator.selection(selection_size);
         // Linfa
         let data: Vec<f32> = vector_selection
@@ -166,7 +170,7 @@ impl<
         eprintln!("sub_arrays: {sub_arrays:?}");
         let observations = DatasetBase::from(sub_arrays);
         // TODO review this number
-        let number_of_clusters = usize::min(sub_length, 1_000);
+        let number_of_clusters = usize::min(sub_length, number_of_centroids);
         let prng = StdRng::seed_from_u64(42);
 
         eprintln!("{} Running kmeans", Utc::now());
