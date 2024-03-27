@@ -155,10 +155,11 @@ impl<
     >
 {
     pub fn new(
-        selection_size: usize,
+        subvector_selection_size: usize,
         number_of_centroids: usize,
         comparator: FullComparator,
     ) -> Self {
+        let selection_size = subvector_selection_size / QUANTIZED_SIZE;
         let vector_selection = comparator.selection(selection_size);
         // Linfa
         let data: Vec<f32> = vector_selection
