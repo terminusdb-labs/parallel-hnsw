@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::{AbstractVector, Comparator, Hnsw, OrderedFloat, Serializable, VectorId};
+use chrono::Utc;
 use linfa::traits::Fit;
 use linfa::DatasetBase;
 use linfa_clustering::KMeans;
@@ -167,11 +168,13 @@ impl<
         // TODO review this number
         let number_of_clusters = usize::min(sub_length, 1_000);
         let prng = StdRng::seed_from_u64(42);
-        eprintln!("Running kmeans");
+
+        eprintln!("{} Running kmeans", Utc::now());
         let model = KMeans::params_with_rng(number_of_clusters, prng.clone())
             .tolerance(1e-2)
             .fit(&observations)
             .expect("KMeans fitted");
+        eprintln!("{} kmeans finished", Utc::now());
         let centroid_array: Array2<f32> = model.centroids().clone();
         centroid_array.len();
         let centroid_flat: Vec<f32> = centroid_array
