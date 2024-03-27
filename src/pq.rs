@@ -6,7 +6,8 @@ use linfa::traits::Fit;
 use linfa::DatasetBase;
 use linfa_clustering::KMeans;
 use ndarray::{Array, Array2};
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
+use rand_distr::Uniform;
 use rayon::prelude::*;
 
 pub trait Quantizer<const SIZE: usize, const QUANTIZED_SIZE: usize> {
@@ -154,11 +155,11 @@ impl<
         FullComparator,
     >
 {
-    pub fn new(
+    fn kmeans_centroids(
         subvector_selection_size: usize,
         number_of_centroids: usize,
-        comparator: FullComparator,
-    ) -> Self {
+        comparator: &FullComparator,
+    ) -> Vec<[f32; CENTROID_SIZE]> {
         let selection_size = subvector_selection_size / QUANTIZED_SIZE;
         let vector_selection = comparator.selection(selection_size);
         // Linfa
@@ -187,15 +188,38 @@ impl<
             .unwrap()
             .to_vec();
         eprintln!("centroid flat len: {}", centroid_flat.len());
-        let centroids: Vec<[f32; CENTROID_SIZE]> = centroid_flat
+        centroid_flat
             .chunks(CENTROID_SIZE)
             .map(|v| {
                 let mut array = [0.0; CENTROID_SIZE];
                 array.copy_from_slice(v);
                 array
             })
-            .collect();
-        //
+            .collect()
+    }
+
+    fn random_centroids(
+        number_of_centroids: usize,
+        comparator: &FullComparator,
+    ) -> Vec<[f32; CENTROID_SIZE]> {
+        let selection = comparator.selection(number_of_centroids);
+        let mut rng = thread_rng();
+        selection
+            .into_iter()
+            .map(|v| {
+                let quantum = rng.gen_range(0..QUANTIZED_SIZE);
+                let offset = quantum * CENTROID_SIZE;
+                let mut arr: [f32; CENTROID_SIZE] = [0.0; CENTROID_SIZE];
+                arr.copy_from_slice(&v[offset..(offset + CENTROID_SIZE)]);
+
+                arr
+            })
+            .collect()
+    }
+
+    pub fn new(number_of_centroids: usize, comparator: FullComparator) -> Self {
+        //let centroids = Self::kmeans_centroids(subvector_selection_size, &comparator);
+        let centroids = Self::random_centroids(number_of_centroids, &comparator);
         eprintln!("Number of centroids: {}", centroids.len());
 
         let vector_ids = (0..centroids.len()).map(VectorId).collect();
