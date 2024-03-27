@@ -156,12 +156,12 @@ impl<
     >
 {
     fn kmeans_centroids(
-        subvector_selection_size: usize,
         number_of_centroids: usize,
+        subvector_selection_size: usize,
         comparator: &FullComparator,
     ) -> Vec<[f32; CENTROID_SIZE]> {
-        let selection_size = subvector_selection_size / QUANTIZED_SIZE;
-        let vector_selection = comparator.selection(selection_size);
+        let vector_selection = Self::random_centroids(subvector_selection_size, comparator);
+
         // Linfa
         let data: Vec<f32> = vector_selection
             .into_iter()
@@ -178,6 +178,8 @@ impl<
         eprintln!("{} Running kmeans", Utc::now());
         let model = KMeans::params_with_rng(number_of_clusters, prng.clone())
             .tolerance(1e-2)
+            .n_runs(1)
+            .max_n_iterations(5)
             .fit(&observations)
             .expect("KMeans fitted");
         eprintln!("{} kmeans finished", Utc::now());
@@ -218,8 +220,9 @@ impl<
     }
 
     pub fn new(number_of_centroids: usize, comparator: FullComparator) -> Self {
-        //let centroids = Self::kmeans_centroids(subvector_selection_size, &comparator);
-        let centroids = Self::random_centroids(number_of_centroids, &comparator);
+        let centroids =
+            Self::kmeans_centroids(number_of_centroids, 1 * number_of_centroids, &comparator);
+        //let centroids = Self::random_centroids(number_of_centroids, &comparator);
         eprintln!("Number of centroids: {}", centroids.len());
 
         let vector_ids = (0..centroids.len()).map(VectorId).collect();
