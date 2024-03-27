@@ -220,9 +220,8 @@ impl<
     }
 
     pub fn new(number_of_centroids: usize, comparator: FullComparator) -> Self {
-        let centroids =
-            Self::kmeans_centroids(number_of_centroids, 1 * number_of_centroids, &comparator);
-        //let centroids = Self::random_centroids(number_of_centroids, &comparator);
+        //let centroids = Self::kmeans_centroids(number_of_centroids, 1 * number_of_centroids, &comparator);
+        let centroids = Self::random_centroids(number_of_centroids, &comparator);
         eprintln!("Number of centroids: {}", centroids.len());
 
         let vector_ids = (0..centroids.len()).map(VectorId).collect();
