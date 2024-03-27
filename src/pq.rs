@@ -156,7 +156,7 @@ impl<
 {
     pub fn new(
         selection_size: usize,
-        number_of_cnetroids: usize,
+        number_of_centroids: usize,
         comparator: FullComparator,
     ) -> Self {
         let vector_selection = comparator.selection(selection_size);
