@@ -106,7 +106,7 @@ impl<C: Comparator> AsRef<Layer<C>> for Layer<C> {
 
 type NodeDistances = Vec<(NodeId, f32)>;
 
-impl<C: Comparator> Layer<C> {
+impl<C> Layer<C> {
     #[allow(unused)]
     pub fn get_node(&self, v: VectorId) -> Option<NodeId> {
         self.nodes.binary_search(&v).ok().map(NodeId)
@@ -127,6 +127,12 @@ impl<C: Comparator> Layer<C> {
         &mut self.neighbors[(n.0 * self.neighborhood_size)..((n.0 + 1) * self.neighborhood_size)]
     }
 
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+}
+
+impl<C: Comparator> Layer<C> {
     pub fn nearest_neighbors(
         &self,
         n: NodeId,
@@ -240,10 +246,6 @@ impl<C: Comparator> Layer<C> {
                 .collect(),
             index_distance,
         )
-    }
-
-    pub fn node_count(&self) -> usize {
-        self.nodes.len()
     }
 
     pub fn group_nodes_by_vectors(
@@ -565,7 +567,7 @@ pub struct Hnsw<C> {
     zero_layer_neighborhood_size: usize,
 }
 
-impl<C: Comparator + 'static> Hnsw<C> {
+impl<C> Hnsw<C> {
     pub fn vector_count(&self) -> usize {
         self.get_layer(0).map(|l| l.node_count()).unwrap_or(0)
     }
@@ -600,6 +602,11 @@ impl<C: Comparator + 'static> Hnsw<C> {
         }
     }
 
+    #[allow(unused)]
+    fn layer_from_top_to_layer(&self, layer: usize) -> usize {
+        self.layer_count() - layer - 1
+    }
+
     pub fn get_layer_above(&self, i: usize) -> Option<&Layer<C>> {
         if i == 0 {
             None
@@ -620,7 +627,9 @@ impl<C: Comparator + 'static> Hnsw<C> {
     pub fn comparator(&self) -> &C {
         &self.layers[0].comparator
     }
+}
 
+impl<C: Comparator + 'static> Hnsw<C> {
     pub fn search(
         &self,
         v: AbstractVector<C::T>,
@@ -1203,11 +1212,6 @@ impl<C: Comparator + 'static> Hnsw<C> {
         let count = self.link_layer_to_better_neighbors(layer_from_top);
         eprintln!("{layer_from_top}: relinked {count}");
         count
-    }
-
-    #[allow(unused)]
-    fn layer_from_top_to_layer(&self, layer: usize) -> usize {
-        self.layer_count() - layer - 1
     }
 
     fn promote_batch(&mut self, layer_from_top: usize) -> bool {

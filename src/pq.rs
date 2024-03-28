@@ -7,7 +7,6 @@ use linfa::DatasetBase;
 use linfa_clustering::KMeans;
 use ndarray::{Array, Array2};
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
-use rand_distr::Uniform;
 use rayon::prelude::*;
 
 pub trait Quantizer<const SIZE: usize, const QUANTIZED_SIZE: usize> {
@@ -28,13 +27,8 @@ pub struct HnswQuantizer<
 > {
     hnsw: Hnsw<C>,
 }
-
-impl<
-        const SIZE: usize,
-        const CENTROID_SIZE: usize,
-        const QUANTIZED_SIZE: usize,
-        C: 'static + Comparator<T = [f32; CENTROID_SIZE]>,
-    > HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
+impl<const SIZE: usize, const CENTROID_SIZE: usize, const QUANTIZED_SIZE: usize, C>
+    HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
 {
     pub fn new(hnsw: Hnsw<C>) -> Self {
         Self { hnsw }
@@ -132,6 +126,46 @@ pub trait QuantizedComparatorConstructor: Comparator {
     type CentroidComparator: Comparator;
 
     fn new(cc: &Self::CentroidComparator) -> Self;
+}
+
+impl<
+        const SIZE: usize,
+        const CENTROID_SIZE: usize,
+        const QUANTIZED_SIZE: usize,
+        CentroidComparator,
+        QuantizedComparator,
+        FullComparator,
+    >
+    QuantizedHnsw<
+        SIZE,
+        CENTROID_SIZE,
+        QUANTIZED_SIZE,
+        CentroidComparator,
+        QuantizedComparator,
+        FullComparator,
+    >
+{
+    pub fn vector_count(&self) -> usize {
+        self.hnsw.vector_count()
+    }
+
+    pub fn quantizer(
+        &self,
+    ) -> &HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, CentroidComparator> {
+        &self.quantizer
+    }
+
+    pub fn centroid_comparator(&self) -> &CentroidComparator {
+        self.quantizer.comparator()
+    }
+
+    pub fn quantized_comparator(&self) -> &QuantizedComparator {
+        self.hnsw.comparator()
+    }
+
+    pub fn full_comparator(&self) -> &FullComparator {
+        &self.comparator
+    }
 }
 
 impl<
@@ -271,28 +305,6 @@ impl<
             hnsw,
             comparator,
         }
-    }
-
-    pub fn vector_count(&self) -> usize {
-        self.hnsw.vector_count()
-    }
-
-    pub fn quantizer(
-        &self,
-    ) -> &HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, CentroidComparator> {
-        &self.quantizer
-    }
-
-    pub fn centroid_comparator(&self) -> &CentroidComparator {
-        self.quantizer.comparator()
-    }
-
-    pub fn quantized_comparator(&self) -> &QuantizedComparator {
-        self.hnsw.comparator()
-    }
-
-    pub fn full_comparator(&self) -> &FullComparator {
-        &self.comparator
     }
 
     pub fn search(
