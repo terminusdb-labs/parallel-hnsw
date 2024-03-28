@@ -1214,7 +1214,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         count
     }
 
-    fn promote_batch(&mut self, layer_from_top: usize) -> bool {
+    pub fn promote_at_layer(&mut self, layer_from_top: usize, _max_proportion: f32) -> bool {
         eprintln!("promoting batch at layer from top: {layer_from_top}");
         let mut vecs = self.discover_vectors_to_promote_2(layer_from_top);
         if vecs.is_empty() {
@@ -1310,6 +1310,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         true
     }
 
+    /*
     #[allow(unused)]
     fn promote_at_layer(&mut self, layer_from_top: usize) -> (Vec<VectorId>, usize) {
         let mut vecs = self.discover_vectors_to_promote_2(layer_from_top);
@@ -1342,6 +1343,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
 
         (vecs, layer_from_top)
     }
+    */
 
     pub fn stochastic_recall(&self, recall_proportion: f32) -> f32 {
         let mut rng = StdRng::seed_from_u64(42);
@@ -1400,10 +1402,15 @@ impl<C: Comparator + 'static> Hnsw<C> {
     }
 
     pub fn improve_neighbors(&mut self, threshold: f32, recall_proportion: f32) {
+        self.improve_neighbors_upto(self.layer_count(), threshold, recall_proportion)
+    }
+
+    pub fn improve_neighbors_upto(&mut self, upto: usize, threshold: f32, recall_proportion: f32) {
+        assert!(upto <= self.layer_count());
         let mut last_recall = 0.0_f32;
         let mut last_improvement = 1.0_f32;
         while last_improvement >= threshold && last_recall != 1.0 {
-            for layer_id_from_top in 0..self.layer_count() {
+            for layer_id_from_top in 0..upto {
                 let count = self.improve_neighborhoods_at_layer(layer_id_from_top);
                 eprintln!("layer {layer_id_from_top}: improved {count}");
             }
@@ -1414,67 +1421,15 @@ impl<C: Comparator + 'static> Hnsw<C> {
         }
     }
 
-    pub fn improve_index(&mut self) {
-        /*
-        for layer_id_from_top in 0..self.layer_count() {
-            let count = self.improve_neighborhoods_at_layer(layer_id_from_top);
-            eprintln!("layer {layer_id_from_top}: improved {count}");
-        }
-        */
-        let mut layer_id_from_top = 0;
-        while layer_id_from_top < self.layer_count() {
-            let layer = self.get_layer_from_top(layer_id_from_top).unwrap();
-            let threshold = layer.node_count() * layer.neighborhood_size / 100;
-            let mut count = usize::MAX;
-            let mut iteration = 0;
+    pub fn improve_index(&mut self, threshold: f32, recall_proportion: f32) {
+        // let's start with a neighborhood optimization so we don't overpromote
+        self.improve_neighbors(threshold, recall_proportion);
 
-            while count > threshold {
-                count = self.improve_neighborhoods_at_layer(layer_id_from_top);
-                eprintln!("layer {layer_id_from_top} iteration {iteration}: improved {count} (threshold {threshold})");
-                iteration += 1;
+        for upto in 1..self.layer_count() {
+            if self.promote_at_layer(upto, 1.0) {
+                //self.improve_neighbors_upto(upto, threshold, recall_proportion);
+                self.improve_neighbors(threshold, recall_proportion);
             }
-
-            if self.promote_batch(layer_id_from_top) {
-                /*
-                for layer in self.layers.iter() {
-                    eprintln!("layer size: {}", layer.node_count());
-                }*/
-                assert_layer_invariants(&self.layers);
-                eprintln!("going back to top");
-                // go back to top
-                layer_id_from_top = 0;
-            } else {
-                eprintln!("advancing");
-                layer_id_from_top += 1;
-            }
-
-            /*
-            let (promoted, changed_layer) = self.promote_at_layer(layer_id_from_top);
-            let promotion_count = promoted.len();
-            if promotion_count > 0 {
-                eprintln!("layer {layer_id_from_top}: promoted {promotion_count} nodes. going back to layer {changed_layer}");
-                let l = self.get_layer_from_top(changed_layer).unwrap();
-                /*
-                let promoted_nodes: Vec<NodeId> = promoted
-                    .into_iter()
-                    .map(|v| l.get_node(v).unwrap())
-                    .collect();
-                */
-                let threshold = promotion_count * l.neighborhood_size / 100;
-                let mut count = usize::MAX;
-                let mut iteration = 0;
-                while count > threshold {
-                    count = self.link_layer_to_better_neighbors(changed_layer);
-                    eprintln!("layer {changed_layer} after promotion iteration {iteration}: improved {count} (threshold {threshold})");
-                    iteration += 1;
-                }
-                // since we promoted, it's a good idea to go back up one layer and do optimization there again
-                //self.link_nodes_in_layer_to_better_neighbors(changed_layer, )
-                layer_id_from_top = changed_layer;
-            } else {
-                layer_id_from_top += 1;
-            }
-            */
         }
     }
 }

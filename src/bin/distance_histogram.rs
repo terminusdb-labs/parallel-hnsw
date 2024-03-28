@@ -3,7 +3,7 @@ use parallel_hnsw::NodeId;
 
 pub fn main() {
     let mut hnsw = make_random_hnsw(100000, 100);
-    hnsw.improve_index();
+    hnsw.improve_index(1.0, 1.0);
     for ix in 0..hnsw.layer_count() {
         let layer = hnsw.get_layer_from_top(ix).unwrap();
         let supers = if ix == 0 {

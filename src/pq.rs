@@ -332,8 +332,14 @@ impl<
         reordered
     }
 
+    pub fn improve_index(&mut self, threshold: f32, recall_proportion: f32) {
+        self.hnsw.improve_index(threshold, recall_proportion)
+    }
     pub fn improve_neighbors(&mut self, threshold: f32, recall_proportion: f32) {
         self.hnsw.improve_neighbors(threshold, recall_proportion)
+    }
+    pub fn promote_at_layer(&mut self, layer_from_top: usize, max_proportion: f32) -> bool {
+        self.hnsw.promote_at_layer(layer_from_top, max_proportion)
     }
 
     pub fn zero_neighborhood_size(&self) -> usize {
