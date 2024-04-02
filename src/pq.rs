@@ -272,7 +272,7 @@ impl<
             centroid_m0,
             centroid_order,
         );
-        //centroid_hnsw.improve_index();
+        //centroid_hnsw.improve_index(0.01, 1.0);
         centroid_hnsw.improve_neighbors(0.01, 1.0);
 
         let centroid_quantizer: HnswQuantizer<
@@ -365,7 +365,7 @@ impl<
         const QUANTIZED_SIZE: usize,
         ComparatorParams,
         CentroidComparator: Serializable<Params = ()> + Clone + Sync + 'static,
-        QuantizedComparator: Serializable<Params = ()> + Clone + 'static,
+        QuantizedComparator: Serializable<Params = CentroidComparator> + Clone + 'static,
         FullComparator: Serializable<Params = ComparatorParams> + 'static,
     > Serializable
     for QuantizedHnsw<
@@ -407,18 +407,20 @@ impl<
         let path_buf: PathBuf = path.as_ref().into();
 
         let quantizer_path = path_buf.join("quantizer");
-        let quantizer = HnswQuantizer::deserialize(quantizer_path, ())?;
+        let quantizer: HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, CentroidComparator> =
+            HnswQuantizer::deserialize(quantizer_path, ())?;
+        let centroid_comparator = quantizer.comparator().clone();
 
         let hnsw_path = path_buf.join("hnsw");
-        let hnsw: Hnsw<QuantizedComparator> = Hnsw::deserialize(hnsw_path, ())?;
+        let hnsw: Hnsw<QuantizedComparator> = Hnsw::deserialize(hnsw_path, centroid_comparator)?;
 
         let comparator_path = path_buf.join("comparator");
-        let comparator = FullComparator::deserialize(comparator_path, params)?;
+        let full_comparator = FullComparator::deserialize(comparator_path, params)?;
 
         Ok(Self {
             quantizer,
             hnsw,
-            comparator,
+            comparator: full_comparator,
         })
     }
 }
