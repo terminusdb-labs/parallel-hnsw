@@ -1022,8 +1022,6 @@ impl<C: Comparator + 'static> Hnsw<C> {
         initialize_new_neighborhoods_into_layer(&new_nodes_map, layer);
         eprintln!("new neighbors initialized");
         let borrowed_comparator = &layer.comparator;
-        let cross_compare = cross_compare_vectors(&vecs, borrowed_comparator);
-        eprintln!("cross comparison done");
         let mut pseudo_layers: Vec<&Layer<_>> = Vec::new();
         pseudo_layers.extend(layers_above.iter());
         /*
@@ -1049,7 +1047,20 @@ impl<C: Comparator + 'static> Hnsw<C> {
                     &pseudo_layers,
                     1,
                 );
-                let cross_results = cross_compare.get(v).unwrap();
+                let cross_results: Vec<(VectorId, f32)> = vecs
+                    .par_iter()
+                    .flat_map(|w| {
+                        if w == v {
+                            None
+                        } else {
+                            let distance = borrowed_comparator.compare_vec(
+                                AbstractVector::Stored(*w),
+                                AbstractVector::Stored(*v),
+                            );
+                            Some((*w, distance))
+                        }
+                    })
+                    .collect();
 
                 distances.extend(cross_results);
 
