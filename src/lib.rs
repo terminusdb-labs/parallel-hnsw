@@ -1005,6 +1005,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
 
         let (old_nodes, old_nodes_map, new_nodes_map, vecs) = generate_node_maps(vecs, layer);
 
+        eprintln!("created node maps");
         assert_eq!(old_nodes_map.len() + new_nodes_map.len(), layer.nodes.len());
 
         let new_neighbors_len = layer.nodes.len() * layer.neighborhood_size;
@@ -1013,14 +1014,16 @@ impl<C: Comparator + 'static> Hnsw<C> {
         unsafe {
             old_neighbors.set_len(new_neighbors_len)
         };
+        eprintln!("allocated new neighbors");
         std::mem::swap(&mut layer.neighbors, &mut old_neighbors);
 
         copy_old_neighborhoods_into_layer(&old_nodes, &old_neighbors, &old_nodes_map, layer);
+        eprintln!("copied old neighbors into new layer");
         initialize_new_neighborhoods_into_layer(&new_nodes_map, layer);
-
+        eprintln!("new neighbors initialized");
         let borrowed_comparator = &layer.comparator;
         let cross_compare = cross_compare_vectors(&vecs, borrowed_comparator);
-
+        eprintln!("cross comparison done");
         let mut pseudo_layers: Vec<&Layer<_>> = Vec::new();
         pseudo_layers.extend(layers_above.iter());
         /*
