@@ -224,12 +224,13 @@ impl<C: Comparator> Layer<C> {
         highest_improvement
     }
 
-    pub fn closest_vectors(
+    pub fn closest_vectors<F: Fn(VectorId) -> bool>(
         &self,
         v: AbstractVector<C::T>,
         candidates: &PriorityQueue<VectorId>,
         candidate_count: usize,
         probe_depth: usize,
+        include: F,
     ) -> (Vec<(VectorId, f32)>, usize) {
         let pairs: Vec<(NodeId, f32)> = candidates
             .iter()
@@ -639,7 +640,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         number_of_candidates: usize,
         probe_depth: usize,
     ) -> Vec<(VectorId, f32)> {
-        search::search_layers(v, number_of_candidates, &self.layers, probe_depth)
+        search::search_layers(v, number_of_candidates, &self.layers, probe_depth, None)
     }
 
     pub fn search_noisy(
@@ -649,7 +650,14 @@ impl<C: Comparator + 'static> Hnsw<C> {
         probe_depth: usize,
         noisy: bool,
     ) -> (Vec<(VectorId, f32)>, usize) {
-        search::search_layers_noisy(v, number_of_candidates, &self.layers, probe_depth, noisy)
+        search::search_layers_noisy(
+            v,
+            number_of_candidates,
+            &self.layers,
+            probe_depth,
+            noisy,
+            None,
+        )
     }
 
     pub fn generate_layer(
@@ -967,6 +975,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                     layers,
                     2,
                     false,
+                    None,
                 );
                 let vector_is_in_matches = matches[0].0 == *vector;
                 if !vector_is_in_matches
@@ -1066,6 +1075,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                     self.neighborhood_size,
                     &pseudo_stack,
                     1,
+                    Some(vector),
                 );
                 for (neighbor_vec, distance) in matches.into_iter().take(10) {
                     if neighbor_vec == vector {

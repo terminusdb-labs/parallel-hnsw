@@ -74,7 +74,7 @@ pub fn initial_vector_distances<C: Comparator, L: AsRef<Layer<C>>>(
     number_of_nodes: usize,
     layers: &[L],
 ) -> Vec<(VectorId, f32)> {
-    search_layers(AbstractVector::Stored(v), number_of_nodes, layers, 1)
+    search_layers(AbstractVector::Stored(v), number_of_nodes, layers, 1, None)
         .into_iter()
         .filter(|(w, _)| v != *w)
         .collect::<Vec<_>>()
@@ -85,8 +85,9 @@ pub fn search_layers<C: Comparator, L: AsRef<Layer<C>>>(
     number_of_candidates: usize,
     layers: &[L],
     probe_depth: usize,
+    exclude: Option<VectorId>,
 ) -> Vec<(VectorId, f32)> {
-    search_layers_noisy(v, number_of_candidates, layers, probe_depth, false).0
+    search_layers_noisy(v, number_of_candidates, layers, probe_depth, false, exclude).0
 }
 
 pub fn search_layers_noisy<C: Comparator, L: AsRef<Layer<C>>>(
@@ -95,6 +96,7 @@ pub fn search_layers_noisy<C: Comparator, L: AsRef<Layer<C>>>(
     layers: &[L],
     probe_depth: usize,
     noisy: bool,
+    exclude: Option<VectorId>,
 ) -> (Vec<(VectorId, f32)>, usize) {
     //let upper_layer_candidate_count = 2;
     let upper_layer_candidate_count = number_of_candidates;
@@ -129,10 +131,13 @@ pub fn search_layers_noisy<C: Comparator, L: AsRef<Layer<C>>>(
             upper_layer_candidate_count
         };
         let layer = &layers[i];
-        let (closest, index_distance) =
-            layer
-                .as_ref()
-                .closest_vectors(v.clone(), &candidates, candidate_count, probe_depth);
+        let (closest, index_distance) = layer.as_ref().closest_vectors(
+            v.clone(),
+            &candidates,
+            candidate_count,
+            probe_depth,
+            |v| Some(v) != exclude,
+        );
         last_index_distance = index_distance;
         if noisy {
             eprintln!("closest: {closest:?}");
