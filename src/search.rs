@@ -33,11 +33,13 @@ pub fn generate_initial_partitions<C: Comparator, L: AsRef<Layer<C>> + Sync>(
     comparator: &C,
     number_of_supers_to_check: usize,
     layers: &[L],
+    node_offset: usize,
 ) -> Vec<(NodeId, VectorId, NodeDistances)> {
     let mut initial_partitions: Vec<(NodeId, VectorId, NodeDistances)> =
         Vec::with_capacity(vs.len());
     vs.par_iter()
         .enumerate()
+        .map(|(node_id, vector_id)| (NodeId(node_id + node_offset), vector_id))
         .map(|(node_id, vector_id)| {
             let comparator = comparator.clone();
             let initial_vector_distances = if layers.is_empty() {
@@ -57,7 +59,7 @@ pub fn generate_initial_partitions<C: Comparator, L: AsRef<Layer<C>> + Sync>(
                     )
                 })
                 .collect();
-            (NodeId(node_id), *vector_id, initial_node_distances)
+            (node_id, *vector_id, initial_node_distances)
         })
         .collect_into_vec(&mut initial_partitions);
 

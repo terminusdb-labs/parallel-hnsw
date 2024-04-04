@@ -25,7 +25,10 @@ use rand_distr::{Distribution, Exp};
 use rayon::prelude::*;
 use std::fmt::Debug;
 
-use crate::{priority_queue::PriorityQueue, search::assert_layer_invariants};
+use crate::{
+    priority_queue::PriorityQueue,
+    search::{assert_layer_invariants, compare_all, generate_initial_partitions},
+};
 
 pub enum WrappedBorrowable<'a, T: ?Sized, Borrowable: Deref<Target = T> + 'a> {
     Left(Borrowable),
@@ -678,6 +681,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
             &comparator,
             number_of_supers_to_check,
             layers,
+            0,
         );
 
         eprintln!("Generating partition groups");
@@ -1020,126 +1024,6 @@ impl<C: Comparator + 'static> Hnsw<C> {
         copy_old_neighborhoods_into_layer(&old_nodes, &old_neighbors, &old_nodes_map, layer);
         eprintln!("copied old neighbors into new layer");
         initialize_new_neighborhoods_into_layer(&new_nodes_map, layer);
-        eprintln!("new neighbors initialized");
-        let borrowed_comparator = &layer.comparator;
-        let mut pseudo_layers: Vec<&Layer<_>> = Vec::new();
-        pseudo_layers.extend(layers_above.iter());
-        /*
-            let pseudo_layer = Layer {
-                comparator: layer.comparator.clone(),
-                neighborhood_size: layer.neighborhood_size,
-                nodes: old_nodes,
-                neighbors: old_neighbors,
-        };
-         */
-        //eprintln!("layer nodes: {:?}", layer.nodes);
-        pseudo_layers.push(layer);
-        assert_layer_invariants(&pseudo_layers);
-        eprintln!("Finding neighborhoods");
-        let c = &layer.comparator;
-        let mut neighborhood_candidates: Vec<(NodeId, NodeId, f32)> = vecs
-            .iter() // TODO: Make this par_iter()
-            .flat_map(|v| {
-                let vec = c.lookup(*v);
-                let mut distances: Vec<(VectorId, f32)> = search::search_layers(
-                    AbstractVector::Unstored(&*vec),
-                    10 * layer.neighborhood_size,
-                    &pseudo_layers,
-                    1,
-                );
-                let cross_results: Vec<(VectorId, f32)> = vecs
-                    .par_iter()
-                    .flat_map(|w| {
-                        if w == v {
-                            None
-                        } else {
-                            let distance = borrowed_comparator.compare_vec(
-                                AbstractVector::Stored(*w),
-                                AbstractVector::Stored(*v),
-                            );
-                            Some((*w, distance))
-                        }
-                    })
-                    .collect();
-
-                distances.extend(cross_results);
-
-                distances.sort_by_key(|(v, d)| (*v, OrderedFloat(*d)));
-                distances.dedup_by_key(|(v, _)| *v);
-                distances.sort_by_key(|(v, d)| (OrderedFloat(*d), *v));
-                distances.truncate(layer.neighborhood_size);
-
-                let neighborhood_distances: Vec<(NodeId, f32)> = distances
-                    .into_iter()
-                    .map(|(w, d)| (layer.get_node(w).unwrap(), d))
-                    .collect();
-
-                let mut neighborhood: Vec<NodeId> =
-                    neighborhood_distances.iter().map(|(n, _)| *n).collect();
-                neighborhood.resize(layer.neighborhood_size, NodeId(!0));
-
-                // Write neighborhood directly here!
-                let our_node = layer.get_node(*v).unwrap();
-                let new_neighborhood = unsafe {
-                    std::slice::from_raw_parts_mut(
-                        layer
-                            .neighbors
-                            .as_ptr()
-                            .add(our_node.0 * layer.neighborhood_size)
-                            as *mut NodeId,
-                        layer.neighborhood_size,
-                    )
-                };
-                new_neighborhood.copy_from_slice(&neighborhood);
-
-                neighborhood_distances
-                    .into_iter() // TODO: Make this par_iter()
-                    .map(move |(w, d)| (w, our_node, d))
-            })
-            .collect();
-        eprintln!("Grouping neighborhoods");
-        neighborhood_candidates.par_sort_by_key(|(n1, n2, d)| (*n1, *n2, OrderedFloat(*d)));
-        let final_groups = neighborhood_candidates
-            .into_iter()
-            .into_group_map_by(|(n, _, _)| *n);
-
-        final_groups.into_par_iter().for_each(|(node, group)| {
-            // 1. find all distances to existing neighbors for this node
-            let neighborhood = unsafe {
-                std::slice::from_raw_parts_mut(
-                    layer
-                        .neighbors
-                        .as_ptr()
-                        .add(node.0 * layer.neighborhood_size) as *mut NodeId,
-                    layer.neighborhood_size,
-                )
-            };
-            let mut distances: NodeDistances = Vec::new();
-            for neighbor in neighborhood.iter().take_while(|n| n.0 != !0) {
-                let distance = layer.comparator.compare_vec(
-                    AbstractVector::Stored(layer.get_vector(node)),
-                    AbstractVector::Stored(layer.get_vector(*neighbor)),
-                );
-
-                distances.push((*neighbor, distance));
-            }
-            // 2. add the new distances that we got in 'group'
-            for (_, neighbor, distance) in group {
-                distances.push((neighbor, distance));
-            }
-            // 3. sort, truncate.
-            distances.sort_by_key(|(n, distance)| (OrderedFloat(*distance), *n));
-            distances.dedup();
-            distances.truncate(layer.neighborhood_size);
-
-            // 4. write back new neighbor list.
-            let mut new_neighborhood: Vec<_> = distances.into_iter().map(|(n, _)| n).collect();
-            new_neighborhood.resize(layer.neighborhood_size, NodeId(!0));
-
-            neighborhood.copy_from_slice(&new_neighborhood)
-        });
-
-        assert_layer_invariants(&self.layers[0..=layer_id_from_top]);
     }
 
     pub fn link_layer_to_better_neighbors(&mut self, layer_from_top: usize) -> usize {
