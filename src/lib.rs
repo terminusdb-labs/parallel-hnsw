@@ -843,8 +843,8 @@ impl<C: Comparator + 'static> Hnsw<C> {
             };
             let layer = hnsw.generate_layer(c.clone(), slice.to_vec(), neighbors, false);
             hnsw.layers.push(layer);
-            //eprintln!("linking to better neighbors");
-            //hnsw.link_layer_to_better_neighbors(i);
+            eprintln!("linking to better neighbors (during construction)");
+            hnsw.improve_index(0.01, 0.01, 1.0, None);
         }
 
         hnsw
