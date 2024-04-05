@@ -353,12 +353,13 @@ impl<
         promotion_threshold: f32,
         neighbor_threshold: f32,
         recall_proportion: f32,
+        last_recall: Option<f32>,
     ) -> f32 {
         self.hnsw.improve_index(
             promotion_threshold,
             neighbor_threshold,
             recall_proportion,
-            None,
+            last_recall,
         )
     }
     pub fn improve_neighbors(
