@@ -1360,7 +1360,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         let mut last_recall =
             self.improve_neighbors(neighbor_threshold, recall_proportion, Some(recall));
         let mut improvement = 1.0;
-        while improvement >= promotion_threshold {
+        while improvement >= promotion_threshold && last_recall != 1.0 {
             let mut layer_count = self.layer_count();
             let mut recall = last_recall;
             for upto in 0..layer_count {
