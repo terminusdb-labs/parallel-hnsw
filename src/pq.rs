@@ -288,7 +288,7 @@ impl<
             centroid_m0,
             centroid_order,
         );
-        centroid_hnsw.improve_index(0.001, 1.0);
+        centroid_hnsw.improve_index(0.001, 0.01, 1.0, None);
         //centroid_hnsw.improve_neighbors(0.01, 1.0);
 
         let centroid_quantizer: HnswQuantizer<
@@ -348,11 +348,27 @@ impl<
         reordered
     }
 
-    pub fn improve_index(&mut self, threshold: f32, recall_proportion: f32) {
-        self.hnsw.improve_index(threshold, recall_proportion)
+    pub fn improve_index(
+        &mut self,
+        promotion_threshold: f32,
+        neighbor_threshold: f32,
+        recall_proportion: f32,
+    ) -> f32 {
+        self.hnsw.improve_index(
+            promotion_threshold,
+            neighbor_threshold,
+            recall_proportion,
+            None,
+        )
     }
-    pub fn improve_neighbors(&mut self, threshold: f32, recall_proportion: f32) {
-        self.hnsw.improve_neighbors(threshold, recall_proportion)
+    pub fn improve_neighbors(
+        &mut self,
+        threshold: f32,
+        recall_proportion: f32,
+        last_recall: Option<f32>,
+    ) -> f32 {
+        self.hnsw
+            .improve_neighbors(threshold, recall_proportion, last_recall)
     }
     pub fn promote_at_layer(&mut self, layer_from_top: usize, max_proportion: f32) -> bool {
         self.hnsw.promote_at_layer(layer_from_top, max_proportion)
@@ -842,7 +858,7 @@ mod tests {
         };
         let mut hnsw: QuantizedHnsw<16, 4, 4, CentroidComparator4, QuantizedComparator4, _> =
             QuantizedHnsw::new(100, fc);
-        hnsw.improve_neighbors(0.01, 1.0);
+        hnsw.improve_neighbors(0.01, 1.0, None);
 
         // Test last vector individually
         let raw_vec = vecs.last().unwrap();
