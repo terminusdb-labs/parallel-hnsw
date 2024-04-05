@@ -6,7 +6,7 @@ use linfa::traits::Fit;
 use linfa::DatasetBase;
 use linfa_clustering::KMeans;
 use ndarray::{Array, Array2};
-use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
+use rand::prelude::*;
 use rayon::prelude::*;
 
 pub trait Quantizer<const SIZE: usize, const QUANTIZED_SIZE: usize> {
@@ -240,7 +240,7 @@ impl<
     ) -> Vec<[f32; CENTROID_SIZE]> {
         let selection = comparator.selection(number_of_centroids);
         let mut rng = thread_rng();
-        selection
+        let mut selected: Vec<_> = selection
             .into_iter()
             .map(|v| {
                 let quantum = rng.gen_range(0..QUANTIZED_SIZE);
@@ -250,7 +250,23 @@ impl<
 
                 arr
             })
-            .collect()
+            .collect();
+
+        eprintln!("done selecting centroids, now dedupping..");
+        let original_len = selected.len();
+        {
+            let borrow: &mut [[OrderedFloat; CENTROID_SIZE]] =
+                unsafe { std::mem::transmute(&mut selected[..]) };
+            borrow.sort();
+        }
+        selected.dedup();
+        let new_len = selected.len();
+        if original_len != new_len {
+            eprintln!("number of centroids {original_len}->{new_len}");
+        }
+        selected.shuffle(&mut rng);
+
+        selected
     }
 
     pub fn new(number_of_centroids: usize, comparator: FullComparator) -> Self {
