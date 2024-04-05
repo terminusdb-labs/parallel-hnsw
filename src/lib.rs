@@ -246,6 +246,7 @@ impl<C: Comparator> Layer<C> {
             queue
                 .iter()
                 .map(|(node_id, distance)| (self.get_vector(node_id), distance))
+                .filter(|(v, _)| include(*v))
                 .take(candidate_count)
                 .collect(),
             index_distance,
