@@ -288,7 +288,7 @@ impl<
             centroid_m0,
             centroid_order,
         );
-        centroid_hnsw.improve_index(0.001, 0.01, 1.0, 0.90, None);
+        centroid_hnsw.improve_index(0.001, 0.01, 1.0, None);
         //centroid_hnsw.improve_neighbors(0.01, 1.0);
 
         let centroid_quantizer: HnswQuantizer<
@@ -353,14 +353,12 @@ impl<
         promotion_threshold: f32,
         neighbor_threshold: f32,
         recall_proportion: f32,
-        target_recall: f32,
         last_recall: Option<f32>,
     ) -> f32 {
         self.hnsw.improve_index(
             promotion_threshold,
             neighbor_threshold,
             recall_proportion,
-            target_recall,
             last_recall,
         )
     }

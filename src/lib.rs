@@ -844,7 +844,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
             let layer = hnsw.generate_layer(c.clone(), slice.to_vec(), neighbors, false);
             hnsw.layers.push(layer);
             eprintln!("linking to better neighbors (during construction)");
-            hnsw.improve_index(0.01, 0.01, 0.1, 0.97, None);
+            hnsw.improve_index(0.01, 0.01, 0.1, None);
         }
 
         hnsw
@@ -1343,6 +1343,22 @@ impl<C: Comparator + 'static> Hnsw<C> {
     }
 
     pub fn improve_index(
+        &mut self,
+        promotion_threshold: f32,
+        neighbor_threshold: f32,
+        recall_proportion: f32,
+        last_recall: Option<f32>,
+    ) -> f32 {
+        self.improve_index_thresholded(
+            promotion_threshold,
+            neighbor_threshold,
+            recall_proportion,
+            0.97,
+            last_recall,
+        )
+    }
+
+    pub fn improve_index_thresholded(
         &mut self,
         promotion_threshold: f32,
         neighbor_threshold: f32,

@@ -66,7 +66,7 @@ pub fn main() {
             while improvement > threshold {
                 iteration += 1;
                 let start_time = SystemTime::now();
-                hnsw.improve_index(1.0, 1.0, 1.0, 0.97, None);
+                hnsw.improve_index(1.0, 1.0, 1.0, None);
                 let hnsw_improvement_time = start_time.elapsed().unwrap();
                 total_improvement_time += hnsw_improvement_time.as_millis();
                 let new_recall = do_test_recall(&hnsw);
