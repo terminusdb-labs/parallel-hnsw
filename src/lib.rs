@@ -1359,8 +1359,12 @@ impl<C: Comparator + 'static> Hnsw<C> {
                     // it to 'count' as a termination condition in the improve_neighbors.
                     recall = self.stochastic_recall(recall_proportion);
 
-                    recall =
-                        self.improve_neighbors(neighbor_threshold, recall_proportion, Some(recall));
+                    recall = self.improve_neighbors_upto(
+                        upto,
+                        neighbor_threshold,
+                        recall_proportion,
+                        Some(recall),
+                    );
                 }
             }
             bailout -= 1;
