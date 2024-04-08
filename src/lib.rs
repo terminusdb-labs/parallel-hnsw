@@ -1342,7 +1342,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         //    self.improve_neighbors(neighbor_threshold, recall_proportion, Some(recall));
 
         let mut improvement = 1.0;
-        let mut bailout = 5;
+        let mut bailout = 20;
         while improvement >= promotion_threshold && recall < 1.0 && bailout != 0 {
             let last_recall = recall;
             let mut upto = 0;
