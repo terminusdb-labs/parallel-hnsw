@@ -844,7 +844,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
             let layer = hnsw.generate_layer(c.clone(), slice.to_vec(), neighbors, false);
             hnsw.layers.push(layer);
             eprintln!("linking to better neighbors (during construction)");
-            hnsw.improve_index(0.01, 0.01, 1.0, None);
+            hnsw.improve_index(0.01, 0.01, 0.1, None);
         }
 
         hnsw
@@ -1360,26 +1360,29 @@ impl<C: Comparator + 'static> Hnsw<C> {
         let mut layer_count = self.layer_count();
         let mut upto = 0;
         let mut bailout_count = 5;
+
+        // optimize before running first promotion
         while upto < layer_count || bailout_count == 0 {
+            recall = self.improve_neighbors_upto(
+                upto,
+                neighbor_threshold,
+                recall_proportion,
+                Some(recall),
+            );
             if self.promote_at_layer(upto, promotion_threshold) {
-                recall = self.improve_neighbors_upto(
-                    upto,
-                    neighbor_threshold,
-                    recall_proportion,
-                    Some(recall),
-                );
-            }
-            let new_layer_count = self.layer_count();
-            if new_layer_count > layer_count {
-                upto = 0;
-                // don't infinitely cycle creating new layers.
-                // should we die here, so as not to save the index?
-                bailout_count -= 1
+                let new_layer_count = self.layer_count();
+                if new_layer_count > layer_count {
+                    upto = 0;
+                    // don't infinitely cycle creating new layers.
+                    // should we die here, so as not to save the index?
+                    bailout_count -= 1
+                } else {
+                    upto += 1
+                }
+                layer_count = new_layer_count
             } else {
                 upto += 1
             }
-
-            layer_count = new_layer_count
         }
 
         recall
