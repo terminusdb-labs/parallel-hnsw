@@ -844,7 +844,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
             let layer = hnsw.generate_layer(c.clone(), slice.to_vec(), neighbors, false);
             hnsw.layers.push(layer);
             eprintln!("linking to better neighbors (during construction)");
-            hnsw.improve_index(0.01, 0.01, 0.1, None);
+            hnsw.improve_index(0.01, 0.01, 0.1, 0.97, None);
         }
 
         hnsw
@@ -957,7 +957,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         layer.reachables_from(node, check)
     }
 
-    pub fn discover_vectors_to_promote_2(&self, layer_id_from_top: usize) -> Vec<VectorId> {
+    pub fn discover_vectors_to_promote(&self, layer_id_from_top: usize) -> Vec<VectorId> {
         //const THRESHOLD: usize = 42;
         let layers = &self.layers[0..=layer_id_from_top];
         let layer_above = if layer_id_from_top == 0 {
@@ -988,20 +988,6 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 }
             })
             .collect()
-    }
-
-    pub fn discover_vectors_to_promote(&self, layer_id: usize) -> Vec<VectorId> {
-        // We need to start with layer zero and proceed upwards
-        self.get_layer(layer_id)
-            .map(|layer| {
-                let supers = self.supers_for_layer(layer_id);
-                layer
-                    .discover_nodes_to_promote(supers)
-                    .iter()
-                    .map(|n| layer.get_vector(*n))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
     }
 
     pub fn extend_layer(&mut self, layer_id: usize, vecs: Vec<VectorId>) {
@@ -1123,19 +1109,27 @@ impl<C: Comparator + 'static> Hnsw<C> {
         count
     }
 
-    pub fn promote_at_layer(&mut self, layer_from_top: usize, _max_proportion: f32) -> bool {
+    pub fn promote_at_layer(&mut self, layer_from_top: usize, max_proportion: f32) -> bool {
         eprintln!("promoting batch at layer from top: {layer_from_top}");
-        let mut vecs = self.discover_vectors_to_promote_2(layer_from_top);
+        let mut vecs = self.discover_vectors_to_promote(layer_from_top);
+        let vecs_length = vecs.len();
+        if max_proportion < 1.0 {
+            vecs = vecs
+                .into_iter()
+                .take(vecs_length * max_proportion as usize)
+                .collect();
+        }
         if vecs.is_empty() {
             return false;
         }
         eprintln!(
-            "vec len for promotion: {}@{} (out of {})",
+            "vec len for promotion: {}@{} (out of {} with proportion {})",
             vecs.len(),
             layer_from_top,
             self.get_layer_from_top(layer_from_top)
                 .unwrap()
-                .node_count()
+                .node_count(),
+            max_proportion
         );
         vecs.sort();
         if layer_from_top == 0 {
@@ -1353,6 +1347,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         promotion_threshold: f32,
         neighbor_threshold: f32,
         recall_proportion: f32,
+        recall_target: f32,
         last_recall: Option<f32>,
     ) -> f32 {
         // let's start with a neighborhood optimization so we don't overpromote
@@ -1362,8 +1357,8 @@ impl<C: Comparator + 'static> Hnsw<C> {
         let mut bailout_count = 5;
 
         // optimize before running first promotion
-        while upto < layer_count || bailout_count == 0 {
-            let mut improvement = 0.0;
+        while upto < layer_count || bailout_count == 0 || recall > recall_target {
+            let mut improvement = 1.0;
             // agressive neighbor improvement at all layers
             while improvement < neighbor_threshold {
                 let new_recall = self.improve_neighbors_upto(
@@ -1375,7 +1370,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 improvement = new_recall - recall;
                 recall = new_recall;
             }
-            if self.promote_at_layer(upto, promotion_threshold) {
+            if recall < recall_target && self.promote_at_layer(upto, promotion_threshold) {
                 let new_layer_count = self.layer_count();
                 if new_layer_count > layer_count {
                     upto = 0;
@@ -1925,7 +1920,7 @@ mod tests {
         let size = 10_000;
         let dimension = 1536;
         let mut hnsw: Hnsw<BigComparator> = bigvec::make_random_hnsw(size, dimension);
-        hnsw.improve_index(0.01, 0.01, 1.0, None);
+        hnsw.improve_index(0.01, 0.01, 1.0, 1.0, None);
         do_test_recall(&hnsw, 1.0);
         panic!();
     }
@@ -1936,14 +1931,14 @@ mod tests {
         let dimension = 50;
         let mut hnsw: Hnsw<BigComparator> =
             bigvec::make_random_hnsw_with_order(size, dimension, 10);
-        hnsw.improve_index(0.01, 0.01, 1.0, None);
+        hnsw.improve_index(0.01, 0.01, 1.0, 1.0, None);
         do_test_recall(&hnsw, 0.0);
         let mut improvement_count = 0;
         let mut last_recall = 0.0;
         let mut last_improvement = 1.0;
         while last_improvement > 0.001 {
             eprintln!("{improvement_count} time to improve index");
-            hnsw.improve_index(0.01, 0.01, 1.0, None);
+            hnsw.improve_index(0.01, 0.01, 1.0, 1.0, None);
             let new_recall = do_test_recall(&hnsw, 0.0);
             last_improvement = new_recall - last_recall;
             last_recall = new_recall;
@@ -1958,7 +1953,7 @@ mod tests {
     fn test_small_index_improvement() {
         let mut hnsw: Hnsw<SillyComparator> = make_simple_hnsw();
         eprintln!("One from bottom: {:?}", hnsw.layers[hnsw.layer_count() - 2]);
-        hnsw.improve_index(0.1, 0.1, 1.0, None);
+        hnsw.improve_index(0.1, 0.1, 1.0, 1.0, None);
         eprintln!(
             "One from bottom after: {:?}",
             hnsw.layers[hnsw.layer_count() - 2]
@@ -1974,7 +1969,7 @@ mod tests {
     #[test]
     fn test_tiny_index_improvement() {
         let mut hnsw: Hnsw<SillyComparator> = make_broken_hnsw();
-        hnsw.improve_index(0.1, 0.1, 1.0, None);
+        hnsw.improve_index(0.1, 0.1, 1.0, 1.0, None);
         let data = &hnsw.layers[hnsw.layer_count() - 1].comparator.data;
         for (i, datum) in data.iter().enumerate() {
             let v = AbstractVector::Unstored(datum);
@@ -2014,7 +2009,7 @@ mod tests {
         let mut hnsw = best_hnsw.unwrap();
         while last_improvement > 0.001 {
             eprintln!("{improvement_count} time to improve index");
-            hnsw.improve_index(0.1, 0.1, 1.0, None);
+            hnsw.improve_index(0.1, 0.1, 1.0, 0.97, None);
             let new_recall = do_test_recall(&hnsw, 0.0);
             last_improvement = new_recall - last_recall;
             last_recall = new_recall;
