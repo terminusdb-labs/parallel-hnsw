@@ -1363,12 +1363,18 @@ impl<C: Comparator + 'static> Hnsw<C> {
 
         // optimize before running first promotion
         while upto < layer_count || bailout_count == 0 {
-            recall = self.improve_neighbors_upto(
-                upto,
-                neighbor_threshold,
-                recall_proportion,
-                Some(recall),
-            );
+            let mut improvement = 0.0;
+            // agressive neighbor improvement at all layers
+            while improvement < neighbor_threshold {
+                let new_recall = self.improve_neighbors_upto(
+                    upto,
+                    neighbor_threshold,
+                    recall_proportion,
+                    Some(recall),
+                );
+                improvement = new_recall - recall;
+                recall = new_recall;
+            }
             if self.promote_at_layer(upto, promotion_threshold) {
                 let new_layer_count = self.layer_count();
                 if new_layer_count > layer_count {
