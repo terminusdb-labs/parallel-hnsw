@@ -997,10 +997,9 @@ impl<C: Comparator + 'static> Hnsw<C> {
             layers_above.len(),
             layers_below.len()
         );
-        let layers_above: &[Layer<C>] = layers_above;
         let layer = &mut layers_below[0];
 
-        let (old_nodes, old_nodes_map, new_nodes_map, vecs) = generate_node_maps(vecs, layer);
+        let (old_nodes, old_nodes_map, new_nodes_map, _vecs) = generate_node_maps(vecs, layer);
 
         eprintln!("created node maps");
         assert_eq!(old_nodes_map.len() + new_nodes_map.len(), layer.nodes.len());
@@ -1346,6 +1345,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         let recall = last_recall.unwrap_or_else(|| self.stochastic_recall(recall_proportion));
         let mut last_recall =
             self.improve_neighbors(neighbor_threshold, recall_proportion, Some(recall));
+
         let mut improvement = 1.0;
         let mut bailout = 5;
         while improvement >= promotion_threshold && last_recall <= 0.95 && bailout != 0 {
