@@ -1356,35 +1356,33 @@ impl<C: Comparator + 'static> Hnsw<C> {
         last_recall: Option<f32>,
     ) -> f32 {
         // let's start with a neighborhood optimization so we don't overpromote
-        let recall = last_recall.unwrap_or_else(|| self.stochastic_recall(recall_proportion));
-        let mut last_recall =
-            self.improve_neighbors(neighbor_threshold, recall_proportion, Some(recall));
-        let mut improvement = 1.0;
-        while improvement >= promotion_threshold && last_recall != 1.0 {
-            let mut layer_count = self.layer_count();
-            let mut recall = last_recall;
-            for upto in 0..layer_count {
-                if self.promote_at_layer(upto, 1.0) {
-                    // promotion might have changed the layer count by adding new top layers.
-                    // We want to make sure we actually get to the bottom layer.
-                    layer_count = self.layer_count();
-
-                    // do a separate recall measure, cause recall might
-                    // have dropped with this promotion and we don't want
-                    // it to 'count' as a termination condition in the improve_neighbors.
-                    recall = self.stochastic_recall(recall_proportion);
-
-                    recall =
-                        self.improve_neighbors(neighbor_threshold, recall_proportion, Some(recall));
-                    //recall = self.improve_neighbors_upto(upto, inner_threshold, recall_proportion, Some(recall));
-                }
+        let mut recall = last_recall.unwrap_or_else(|| self.stochastic_recall(recall_proportion));
+        let mut layer_count = self.layer_count();
+        let mut upto = 0;
+        let mut bailout_count = 5;
+        while upto < layer_count || bailout_count == 0 {
+            if self.promote_at_layer(upto, promotion_threshold) {
+                recall = self.improve_neighbors_upto(
+                    upto,
+                    neighbor_threshold,
+                    recall_proportion,
+                    Some(recall),
+                );
             }
-            improvement = recall - last_recall;
-            last_recall = recall;
-            eprintln!("outer loop improvement: {improvement}");
+            let new_layer_count = self.layer_count();
+            if new_layer_count > layer_count {
+                upto = 0;
+                // don't infinitely cycle creating new layers.
+                // should we die here, so as not to save the index?
+                bailout_count -= 1
+            } else {
+                upto += 1
+            }
+
+            layer_count = new_layer_count
         }
 
-        last_recall
+        recall
     }
 }
 
