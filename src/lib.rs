@@ -25,10 +25,7 @@ use rand_distr::{Distribution, Exp};
 use rayon::prelude::*;
 use std::fmt::Debug;
 
-use crate::{
-    priority_queue::PriorityQueue,
-    search::{assert_layer_invariants, compare_all, generate_initial_partitions},
-};
+use crate::priority_queue::PriorityQueue;
 
 pub enum WrappedBorrowable<'a, T: ?Sized, Borrowable: Deref<Target = T> + 'a> {
     Left(Borrowable),
@@ -844,7 +841,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
             let layer = hnsw.generate_layer(c.clone(), slice.to_vec(), neighbors, false);
             hnsw.layers.push(layer);
             eprintln!("linking to better neighbors (during construction)");
-            hnsw.improve_index(0.01, 0.01, 1.0, None);
+            hnsw.improve_neighbors(0.01, 0.01, None);
         }
 
         hnsw
@@ -957,7 +954,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         layer.reachables_from(node, check)
     }
 
-    pub fn discover_vectors_to_promote_2(&self, layer_id_from_top: usize) -> Vec<VectorId> {
+    pub fn discover_vectors_to_promote(&self, layer_id_from_top: usize) -> Vec<VectorId> {
         //const THRESHOLD: usize = 42;
         let layers = &self.layers[0..=layer_id_from_top];
         let layer_above = if layer_id_from_top == 0 {
@@ -988,20 +985,6 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 }
             })
             .collect()
-    }
-
-    pub fn discover_vectors_to_promote(&self, layer_id: usize) -> Vec<VectorId> {
-        // We need to start with layer zero and proceed upwards
-        self.get_layer(layer_id)
-            .map(|layer| {
-                let supers = self.supers_for_layer(layer_id);
-                layer
-                    .discover_nodes_to_promote(supers)
-                    .iter()
-                    .map(|n| layer.get_vector(*n))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
     }
 
     pub fn extend_layer(&mut self, layer_id: usize, vecs: Vec<VectorId>) {
@@ -1123,11 +1106,15 @@ impl<C: Comparator + 'static> Hnsw<C> {
         count
     }
 
-    pub fn promote_at_layer(&mut self, layer_from_top: usize, _max_proportion: f32) -> bool {
+    pub fn promote_at_layer(&mut self, layer_from_top: usize, max_proportion: f32) -> bool {
         eprintln!("promoting batch at layer from top: {layer_from_top}");
-        let mut vecs = self.discover_vectors_to_promote_2(layer_from_top);
+        let mut vecs = self.discover_vectors_to_promote(layer_from_top);
         if vecs.is_empty() {
             return false;
+        }
+        if max_proportion < 1.0 {
+            let vec_length = vecs.len();
+            vecs = vecs.into_iter().take(vec_length).collect();
         }
         eprintln!(
             "vec len for promotion: {}@{} (out of {})",
@@ -1360,15 +1347,13 @@ impl<C: Comparator + 'static> Hnsw<C> {
         let mut last_recall =
             self.improve_neighbors(neighbor_threshold, recall_proportion, Some(recall));
         let mut improvement = 1.0;
-        while improvement >= promotion_threshold && last_recall != 1.0 {
-            let mut layer_count = self.layer_count();
+        let mut bailout = 5;
+        while improvement >= promotion_threshold && last_recall <= 0.95 && bailout != 0 {
+            let layer_count = self.layer_count();
             let mut recall = last_recall;
             for upto in 0..layer_count {
                 if self.promote_at_layer(upto, 1.0) {
                     // promotion might have changed the layer count by adding new top layers.
-                    // We want to make sure we actually get to the bottom layer.
-                    layer_count = self.layer_count();
-
                     // do a separate recall measure, cause recall might
                     // have dropped with this promotion and we don't want
                     // it to 'count' as a termination condition in the improve_neighbors.
@@ -1376,9 +1361,9 @@ impl<C: Comparator + 'static> Hnsw<C> {
 
                     recall =
                         self.improve_neighbors(neighbor_threshold, recall_proportion, Some(recall));
-                    //recall = self.improve_neighbors_upto(upto, inner_threshold, recall_proportion, Some(recall));
                 }
             }
+            bailout -= 1;
             improvement = recall - last_recall;
             last_recall = recall;
             eprintln!("outer loop improvement: {improvement}");
