@@ -819,19 +819,23 @@ impl<C: Comparator + 'static> Hnsw<C> {
         // eprintln!("neighborhood_size: {neighborhood_size}");
         // eprintln!("total_size: {total_size}");
         // eprintln!("layer count: {layer_count}");
-        let partitions = calculate_partitions(total_size, order);
+        let mut partitions = calculate_partitions(total_size, order);
+        eprintln!("generate with partitions: {partitions:?}");
         assert!(!partitions.is_empty());
-        let layer_count = partitions.len();
-        let layers = Vec::with_capacity(layer_count);
+        let layers = Vec::with_capacity(partitions.len());
         let mut hnsw: Hnsw<C> = Hnsw {
             layers,
             neighborhood_size,
             zero_layer_neighborhood_size,
             order,
         };
-        for (i, length) in partitions.iter().enumerate() {
+        let mut i = 0;
+        while i != partitions.len() {
+            eprintln!("i: {i} len: {}", partitions.len());
+            let layer_count = partitions.len();
+            let length = partitions[i];
             let level = layer_count - i - 1;
-            let slice_length = std::cmp::min(*length, total_size);
+            let slice_length = std::cmp::min(length, total_size);
             let slice = &vs[0..slice_length];
             let neighbors = if level == 0 {
                 zero_layer_neighborhood_size
@@ -841,7 +845,21 @@ impl<C: Comparator + 'static> Hnsw<C> {
             let layer = hnsw.generate_layer(c.clone(), slice.to_vec(), neighbors, false);
             hnsw.layers.push(layer);
             eprintln!("linking to better neighbors (during construction)");
-            hnsw.improve_neighbors(0.01, 0.01, None);
+            let old_layer_count = hnsw.layer_count();
+            hnsw.improve_index(0.01, 0.01, 0.1, None);
+            let new_layer_count = hnsw.layer_count();
+            let delta = new_layer_count - old_layer_count;
+            if delta > 0 {
+                // new layers were added. We need to fix the partitions.
+                let suffix: Vec<_> = partitions[i + 1..].to_vec();
+                eprintln!("suffix: {suffix:?}");
+                partitions = hnsw.layers.iter().map(|l| l.node_count()).collect();
+                partitions.extend(suffix);
+                eprintln!("recalculated new partitions: {partitions:?}");
+                i += delta;
+            }
+            //hnsw.improve_neighbors(0.01, 0.01, None);
+            i += 1;
         }
 
         hnsw
@@ -1170,8 +1188,11 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 let mut layers = new_top.layers;
                 new_top_len = layers.len();
                 eprintln!("generated {} new top layers (and extending)", layers.len());
-                std::mem::swap(&mut self.layers, &mut layers);
+                // we are replacing layers so let's take out the ones we just replaced
+                let suffix = layers[layer_from_top..].to_vec();
+                self.layers.clear();
                 self.layers.extend(layers);
+                self.layers.extend(suffix);
                 for layer in self.layers.iter() {
                     eprintln!("layer count: {}", layer.node_count());
                 }
@@ -1337,24 +1358,26 @@ impl<C: Comparator + 'static> Hnsw<C> {
 
     pub fn improve_index_at(
         &mut self,
-        upto: usize,
+        layer_from_top: usize,
         promotion_threshold: f32,
         neighbor_threshold: f32,
         recall_proportion: f32,
         last_recall: Option<f32>,
     ) -> (f32, usize) {
         // let's start with a neighborhood optimization so we don't overpromote
-        let mut recall =
-            last_recall.unwrap_or_else(|| self.stochastic_recall_at(upto, recall_proportion));
+        let mut recall = last_recall
+            .unwrap_or_else(|| self.stochastic_recall_at(layer_from_top, recall_proportion));
 
         let mut improvement = 1.0;
         let mut bailout = 1;
-        let mut current_layer_from_top = 0;
+        let mut current_layer_from_top = layer_from_top;
         while improvement >= promotion_threshold && recall < 1.0 && bailout != 0 {
+            eprintln!("improve_index_at {improvement}>={promotion_threshold} && {recall} < 1.0 && {bailout} != 0");
             let last_recall = recall;
             current_layer_from_top = 0;
-            while current_layer_from_top <= upto && bailout != 0 {
+            while current_layer_from_top <= layer_from_top && bailout != 0 {
                 let layer_count = self.layer_count();
+                eprintln!("improve_index_at is going to call improve_neighbors_upto");
                 recall = self.improve_neighbors_upto(
                     current_layer_from_top + 1,
                     neighbor_threshold,
@@ -1397,16 +1420,21 @@ impl<C: Comparator + 'static> Hnsw<C> {
         // let's start with a neighborhood optimization so we don't overpromote
         let mut recall = last_recall.unwrap_or_else(|| self.stochastic_recall(recall_proportion));
 
-        let mut upto = 0;
-        while upto < self.layer_count() {
-            (recall, upto) = self.improve_index_at(
-                upto,
+        let mut layer_from_top = 0;
+        while layer_from_top < self.layer_count() {
+            eprintln!(
+                "improve index, layer_from_top={layer_from_top}, layer_count: {}",
+                self.layer_count()
+            );
+            (recall, layer_from_top) = self.improve_index_at(
+                layer_from_top,
                 promotion_threshold,
                 neighbor_threshold,
                 recall_proportion,
                 None,
             );
-            upto += 1;
+            eprintln!("afterwards, layer_from_top is {layer_from_top}");
+            layer_from_top += 1;
         }
 
         recall
