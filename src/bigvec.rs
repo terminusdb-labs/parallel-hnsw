@@ -16,6 +16,16 @@ pub fn make_random_hnsw_with_order(
     dimension: usize,
     order: usize,
 ) -> Hnsw<BigComparator> {
+    make_random_hnsw_with_size(count, dimension, order, 24, 48)
+}
+
+pub fn make_random_hnsw_with_size(
+    count: usize,
+    dimension: usize,
+    order: usize,
+    m: usize,
+    m0: usize,
+) -> Hnsw<BigComparator> {
     let data: Vec<Vec<f32>> = (0..count)
         .into_par_iter()
         .map(move |i| {
@@ -27,8 +37,6 @@ pub fn make_random_hnsw_with_order(
         data: Arc::new(data),
     };
     let vs: Vec<_> = (0..count).map(VectorId).collect();
-    let m = 24;
-    let m0 = 48;
     let hnsw: Hnsw<BigComparator> = Hnsw::generate(c, vs, m, m0, order);
     hnsw
 }

@@ -619,7 +619,7 @@ impl<C> Hnsw<C> {
 
     pub fn entry_vector(&self) -> VectorId {
         // Other choices are possible
-        VectorId(0)
+        self.layers[0].nodes[0]
     }
 
     pub fn layer_count(&self) -> usize {
@@ -1156,6 +1156,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
             eprintln!("promotions: {promotions:?}");
             let mut new_top_len = 0;
             if promotions.len() > layer_from_top {
+                eprintln!("Adding {} more layer(s)", promotions.len() - layer_from_top);
                 // we are going to need at least one more layer
                 let count = promotions[layer_from_top];
                 let top_vecs: Vec<_> = vecs.iter().cloned().take(count).collect();
@@ -1239,10 +1240,11 @@ impl<C: Comparator + 'static> Hnsw<C> {
         (vecs, layer_from_top)
     }
     */
-    pub fn stochastic_recall_upto(&self, upto: usize, recall_proportion: f32) -> f32 {
+    pub fn stochastic_recall_at(&self, at: usize, recall_proportion: f32) -> f32 {
         let mut rng = StdRng::seed_from_u64(42);
-        eprintln!("stochastic recall upto: {upto}");
-        let layer = self.get_layer_from_top(upto).unwrap();
+        eprintln!("stochastic recall upto: {at}");
+        eprintln!("layer count: {}", self.layer_count());
+        let layer = self.get_layer_from_top(at).unwrap();
         let total = layer.node_count();
         let selection = usize::max(1, (total as f32 * recall_proportion) as usize);
         let vecs_to_find: Vec<VectorId> = if selection == total {
@@ -1265,7 +1267,9 @@ impl<C: Comparator + 'static> Hnsw<C> {
     }
 
     pub fn stochastic_recall(&self, recall_proportion: f32) -> f32 {
-        self.stochastic_recall_upto(self.layer_count() - 1, recall_proportion)
+        eprintln!("In stochastic recall");
+        assert!(self.layer_count() != 0);
+        self.stochastic_recall_at(self.layer_count() - 1, recall_proportion)
     }
 
     pub fn recall(&self) -> f32 {
@@ -1313,6 +1317,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         last_recall: Option<f32>,
     ) -> f32 {
         assert!(upto <= self.layer_count());
+        assert!(upto >= 1);
         let mut last_recall = last_recall.unwrap_or(0.0);
         let mut last_improvement = 1.0_f32;
         while last_improvement >= threshold && last_recall < 1.0 {
@@ -1320,13 +1325,66 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 let count = self.improve_neighborhoods_at_layer(layer_id_from_top);
                 eprintln!("layer {layer_id_from_top}: improved {count}");
             }
-            let recall = self.stochastic_recall_upto(upto - 1, recall_proportion);
+
+            let recall = self.stochastic_recall_at(upto - 1, recall_proportion);
             last_improvement = recall - last_recall;
             last_recall = recall;
             eprintln!("recall {recall} (improvement: {last_improvement})");
         }
 
         last_recall
+    }
+
+    pub fn improve_index_at(
+        &mut self,
+        upto: usize,
+        promotion_threshold: f32,
+        neighbor_threshold: f32,
+        recall_proportion: f32,
+        last_recall: Option<f32>,
+    ) -> (f32, usize) {
+        // let's start with a neighborhood optimization so we don't overpromote
+        let mut recall =
+            last_recall.unwrap_or_else(|| self.stochastic_recall_at(upto, recall_proportion));
+
+        let mut improvement = 1.0;
+        let mut bailout = 1;
+        let mut current_layer_from_top = 0;
+        while improvement >= promotion_threshold && recall < 1.0 && bailout != 0 {
+            let last_recall = recall;
+            current_layer_from_top = 0;
+            while current_layer_from_top <= upto && bailout != 0 {
+                let layer_count = self.layer_count();
+                recall = self.improve_neighbors_upto(
+                    current_layer_from_top + 1,
+                    neighbor_threshold,
+                    recall_proportion,
+                    Some(recall),
+                );
+
+                eprintln!("About to promote");
+                if self.promote_at_layer(current_layer_from_top, promotion_threshold) {
+                    let new_layer_count = self.layer_count();
+                    let layer_delta = new_layer_count - layer_count;
+                    eprintln!("We did promote!  With layer delta: {layer_delta}");
+                    recall = self.improve_neighbors_upto(
+                        current_layer_from_top + layer_delta + 1,
+                        neighbor_threshold,
+                        recall_proportion,
+                        Some(recall),
+                    );
+                    eprintln!("recall after promotion: {recall}");
+                    current_layer_from_top += 1 + layer_delta;
+                } else {
+                    current_layer_from_top += 1;
+                }
+            }
+            bailout -= 1;
+            improvement = recall - last_recall;
+            eprintln!("outer loop improvement: {improvement}");
+        }
+
+        (recall, current_layer_from_top)
     }
 
     pub fn improve_index(
@@ -1338,42 +1396,17 @@ impl<C: Comparator + 'static> Hnsw<C> {
     ) -> f32 {
         // let's start with a neighborhood optimization so we don't overpromote
         let mut recall = last_recall.unwrap_or_else(|| self.stochastic_recall(recall_proportion));
-        //let mut last_recall =
-        //    self.improve_neighbors(neighbor_threshold, recall_proportion, Some(recall));
 
-        let mut improvement = 1.0;
-        let mut bailout = 20;
-        while improvement >= promotion_threshold && recall < 1.0 && bailout != 0 {
-            let last_recall = recall;
-            let mut upto = 0;
-            while upto < self.layer_count() && bailout != 0 {
-                let layer_count = self.layer_count();
-                eprintln!("About to promote");
-                if self.promote_at_layer(upto, promotion_threshold) {
-                    // promotion might have changed the layer count by adding new top layers.
-                    // do a separate recall measure, cause recall might
-                    // have dropped with this promotion and we don't want
-                    // it to 'count' as a termination condition in the improve_neighbors.
-                    recall = self.stochastic_recall_upto(upto, recall_proportion);
-
-                    recall = self.improve_neighbors_upto(
-                        upto,
-                        neighbor_threshold,
-                        recall_proportion,
-                        Some(recall),
-                    );
-                    eprintln!("recall after promotion: {recall}");
-                }
-                if self.layer_count() > layer_count {
-                    bailout -= 1;
-                    upto = 0;
-                } else {
-                    upto += 1;
-                }
-            }
-            bailout -= 1;
-            improvement = recall - last_recall;
-            eprintln!("outer loop improvement: {improvement}");
+        let mut upto = 0;
+        while upto < self.layer_count() {
+            (recall, upto) = self.improve_index_at(
+                upto,
+                promotion_threshold,
+                neighbor_threshold,
+                recall_proportion,
+                None,
+            );
+            upto += 1;
         }
 
         recall
@@ -1937,6 +1970,17 @@ mod tests {
             eprintln!("=========");
         }
         panic!();
+    }
+
+    #[test]
+    fn test_layer_generation() {
+        let size = 10_000;
+        let dimension = 1536;
+        let mut hnsw: Hnsw<BigComparator> =
+            bigvec::make_random_hnsw_with_size(size, dimension, 24, 24, 48);
+        hnsw.improve_index(0.01, 0.01, 1.0, None);
+        do_test_recall(&hnsw, 0.0);
+        panic!()
     }
 
     #[test]
