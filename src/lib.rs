@@ -1187,6 +1187,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 eprintln!("Adding {} more layer(s)", promotions.len() - layer_from_top);
                 // we are going to need at least one more layer
                 let count = promotions[layer_from_top + delta];
+                eprintln!("top vecs count: {count}");
                 let top_vecs: Vec<_> = vecs.iter().cloned().take(count).collect();
                 let new_top = Self::generate(
                     self.comparator().clone(),
@@ -1409,6 +1410,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                     let new_layer_count = self.layer_count();
                     eprintln!("New layer count: {new_layer_count}, old layer count: {layer_count}");
                     let layer_delta = new_layer_count - layer_count;
+                    assert!(new_layer_count >= layer_count);
                     eprintln!("We did promote!  With layer delta: {layer_delta}");
                     recall = self.improve_neighbors_upto(
                         current_layer_from_top + layer_delta + 1,
@@ -2026,10 +2028,10 @@ mod tests {
 
     #[test]
     fn test_layer_generation() {
-        let size = 10_000;
+        let size = 100_000;
         let dimension = 1536;
         let mut hnsw: Hnsw<BigComparator> =
-            bigvec::make_random_hnsw_with_size(size, dimension, 24, 24, 48);
+            bigvec::make_random_hnsw_with_size(size, dimension, 12, 12, 24);
         hnsw.improve_index(0.01, 0.01, 1.0, None);
         do_test_recall(&hnsw, 0.0);
         panic!()
