@@ -1211,6 +1211,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 let mut promotions_prefix = vec![0; new_top_len];
                 promotions_prefix.extend(promotions_suffix);
                 promotions = promotions_prefix;
+                assert!(promotions.len() == self.layers.len())
             }
 
             //promotions.truncate(layer_from_top + delta);
