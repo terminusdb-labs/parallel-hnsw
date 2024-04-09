@@ -178,3 +178,19 @@ pub fn assert_layer_invariants<C: Comparator, L: AsRef<Layer<C>>>(layers: &[L]) 
         }
     }
 }
+
+pub fn match_within_epsilon(vector: VectorId, matches: Vec<(VectorId, f32)>) -> bool {
+    let mut vector_is_in_matches = false;
+    let epsilon = 1e-5;
+    for m in matches.into_iter() {
+        let d = m.1;
+        if d.abs() < epsilon {
+            if m.0 == vector {
+                vector_is_in_matches = true;
+            }
+        } else {
+            break;
+        }
+    }
+    vector_is_in_matches
+}

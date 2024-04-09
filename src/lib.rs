@@ -25,7 +25,7 @@ use rand_distr::{Distribution, Exp};
 use rayon::prelude::*;
 use std::fmt::Debug;
 
-use crate::priority_queue::PriorityQueue;
+use crate::{priority_queue::PriorityQueue, search::match_within_epsilon};
 
 pub enum WrappedBorrowable<'a, T: ?Sized, Borrowable: Deref<Target = T> + 'a> {
     Left(Borrowable),
@@ -974,12 +974,14 @@ impl<C: Comparator + 'static> Hnsw<C> {
 
     pub fn discover_vectors_to_promote(&self, layer_id_from_top: usize) -> Vec<VectorId> {
         //const THRESHOLD: usize = 42;
+
         let layers = &self.layers[0..=layer_id_from_top];
         let layer_above = if layer_id_from_top == 0 {
             None
         } else {
             Some(&layers[layer_id_from_top - 1])
         };
+        eprintln!("layer count for discovery: {}", layers.len());
         let current_layer = &layers[layer_id_from_top];
         current_layer
             .nodes
@@ -993,7 +995,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                     false,
                     None,
                 );
-                let vector_is_in_matches = matches[0].0 == *vector;
+                let vector_is_in_matches = match_within_epsilon(*vector, matches);
                 if !vector_is_in_matches
                     && (layer_above.is_none() || layer_above.unwrap().get_node(*vector).is_none())
                 {
@@ -1126,12 +1128,15 @@ impl<C: Comparator + 'static> Hnsw<C> {
     pub fn promote_at_layer(&mut self, layer_from_top: usize, max_proportion: f32) -> bool {
         eprintln!("promoting batch at layer from top: {layer_from_top}");
         let mut vecs = self.discover_vectors_to_promote(layer_from_top);
-        if vecs.is_empty() {
-            return false;
+        for i in 0..self.layer_count() {
+            eprintln!("{}: Layer size is: {}", i, self.layers[i].node_count());
         }
         if max_proportion < 1.0 {
             let vec_length = vecs.len();
             vecs = vecs.into_iter().take(vec_length).collect();
+        }
+        if vecs.is_empty() {
+            return false;
         }
         eprintln!(
             "vec len for promotion: {}@{} (out of {})",
@@ -1173,10 +1178,15 @@ impl<C: Comparator + 'static> Hnsw<C> {
             let mut promotions = calculate_partitions_for_additions(&sizes, vecs.len(), self.order);
             eprintln!("promotions: {promotions:?}");
             let mut new_top_len = 0;
-            if promotions.len() > layer_from_top {
+            let delta = if promotions.len() > layer_from_top {
+                promotions.len() - (layer_from_top + 1)
+            } else {
+                0
+            };
+            if promotions.len() > layer_from_top + 1 {
                 eprintln!("Adding {} more layer(s)", promotions.len() - layer_from_top);
                 // we are going to need at least one more layer
-                let count = promotions[layer_from_top];
+                let count = promotions[layer_from_top + delta];
                 let top_vecs: Vec<_> = vecs.iter().cloned().take(count).collect();
                 let new_top = Self::generate(
                     self.comparator().clone(),
@@ -1185,32 +1195,35 @@ impl<C: Comparator + 'static> Hnsw<C> {
                     self.neighborhood_size,
                     self.order,
                 );
-                let mut layers = new_top.layers;
+                let layers = new_top.layers;
                 new_top_len = layers.len();
                 eprintln!("generated {} new top layers (and extending)", layers.len());
                 // we are replacing layers so let's take out the ones we just replaced
-                let suffix = layers[layer_from_top..].to_vec();
+                let suffix = self.layers[layer_from_top..].to_vec();
                 self.layers.clear();
                 self.layers.extend(layers);
                 self.layers.extend(suffix);
                 for layer in self.layers.iter() {
                     eprintln!("layer count: {}", layer.node_count());
                 }
+                let promotions_suffix = &promotions[layer_from_top + delta + 1..];
+                let mut promotions_prefix = vec![0; new_top_len];
+                promotions_prefix.extend(promotions_suffix);
+                promotions = promotions_prefix;
             }
 
-            promotions.truncate(layer_from_top);
-            eprintln!("truncated promotions: {promotions:?}");
+            //promotions.truncate(layer_from_top + delta);
+            //eprintln!("truncated promotions: {promotions:?}");
             promotions.reverse();
 
             eprintln!("promotion sizes after maybe having generated a top {promotions:?}");
 
-            for (original_layer_id_from_top, promotion_count) in promotions.into_iter().enumerate()
-            {
+            for (promotion_id_from_top, promotion_count) in promotions.into_iter().enumerate() {
                 if promotion_count == 0 {
                     continue;
                 }
-                eprintln!("original_layer_id_from_top: {original_layer_id_from_top}");
-                let layer_id_from_top = original_layer_id_from_top + new_top_len;
+                eprintln!("original_layer_id_from_top: {promotion_id_from_top}");
+                let layer_id_from_top = promotion_id_from_top;
                 eprintln!("layer_id_from_top: {layer_id_from_top}");
                 let layer = self.get_layer_from_top(layer_id_from_top).unwrap();
                 let vecs_to_promote: Vec<_> = vecs
@@ -1222,6 +1235,10 @@ impl<C: Comparator + 'static> Hnsw<C> {
 
                 let layer_id_from_bottom = self.layer_from_top_to_layer(layer_id_from_top);
                 self.extend_layer(layer_id_from_bottom, vecs_to_promote)
+            }
+            eprintln!("after extension");
+            for i in 0..self.layer_count() {
+                eprintln!("{}: Layer size is: {}", i, self.layers[i].node_count());
             }
         }
         true
@@ -1263,7 +1280,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
     */
     pub fn stochastic_recall_at(&self, at: usize, recall_proportion: f32) -> f32 {
         let mut rng = StdRng::seed_from_u64(42);
-        eprintln!("stochastic recall upto: {at}");
+        eprintln!("stochastic recall at: {at}");
         eprintln!("layer count: {}", self.layer_count());
         let layer = self.get_layer_from_top(at).unwrap();
         let total = layer.node_count();
@@ -1284,7 +1301,9 @@ impl<C: Comparator + 'static> Hnsw<C> {
             })
             .count();
 
-        relevant as f32 / selection as f32
+        let recall = relevant as f32 / selection as f32;
+        eprintln!("with recall: {recall}");
+        recall
     }
 
     pub fn stochastic_recall(&self, recall_proportion: f32) -> f32 {
@@ -1388,6 +1407,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 eprintln!("About to promote");
                 if self.promote_at_layer(current_layer_from_top, promotion_threshold) {
                     let new_layer_count = self.layer_count();
+                    eprintln!("New layer count: {new_layer_count}, old layer count: {layer_count}");
                     let layer_delta = new_layer_count - layer_count;
                     eprintln!("We did promote!  With layer delta: {layer_delta}");
                     recall = self.improve_neighbors_upto(
@@ -1911,7 +1931,7 @@ mod tests {
             let v = AbstractVector::Unstored(datum);
             let results = hnsw.search(v, 9, 1);
             eprintln!("results: {results:?}");
-            assert_eq!(VectorId(i), results[0].0)
+            assert!(match_within_epsilon(VectorId(i), results));
         }
     }
 
@@ -1971,7 +1991,11 @@ mod tests {
         let size = 10_000;
         let dimension = 1536;
         let mut hnsw: Hnsw<BigComparator> = bigvec::make_random_hnsw(size, dimension);
-        hnsw.improve_index(0.01, 0.01, 1.0, None);
+        do_test_recall(&hnsw, 0.9);
+        eprintln!("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+        eprintln!("Finished building, now improving");
+        eprintln!("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+        hnsw.improve_index(0.1, 0.01, 1.0, None);
         do_test_recall(&hnsw, 1.0);
         panic!();
     }
@@ -2031,11 +2055,12 @@ mod tests {
     #[test]
     fn test_tiny_index_improvement() {
         let mut hnsw: Hnsw<SillyComparator> = make_broken_hnsw();
-        hnsw.improve_index(0.1, 0.1, 1.0, None);
+        hnsw.improve_index(1.0, 0.1, 1.0, None);
         let data = &hnsw.layers[hnsw.layer_count() - 1].comparator.data;
         for (i, datum) in data.iter().enumerate() {
             let v = AbstractVector::Unstored(datum);
             let results = hnsw.search(v, 9, 1);
+            eprintln!("{results:?}");
             assert_eq!(VectorId(i), results[0].0)
         }
     }
@@ -2190,11 +2215,11 @@ mod tests {
     #[test]
     fn test_euclidean() {
         let mut prng = StdRng::seed_from_u64(42);
-        let vecs: Vec<Vec<f32>> = (0..10_000)
+        let vecs: Vec<Vec<f32>> = (0..100_000)
             .map(move |_| random_vec(&mut prng, 32))
             .collect();
         let cc = Comparator32 { data: vecs.into() };
-        let vids: Vec<VectorId> = (0..10_000).map(VectorId).collect();
+        let vids: Vec<VectorId> = (0..100_000).map(VectorId).collect();
         let mut hnsw: Hnsw<Comparator32> = Hnsw::generate(cc, vids, 24, 48, 12);
         hnsw.improve_neighbors(0.01, 1.0, None);
         panic!()
