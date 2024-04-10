@@ -1204,8 +1204,8 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 self.layers.clear();
                 self.layers.extend(layers);
                 self.layers.extend(suffix);
-                for layer in self.layers.iter() {
-                    eprintln!("layer count: {}", layer.node_count());
+                for (i, layer) in self.layers.iter().enumerate() {
+                    eprintln!("{i}: layer node count: {}", layer.node_count());
                 }
                 let promotions_suffix: Vec<_> = promotions[layer_from_top + delta + 1..].to_vec();
                 let promotions_prefix: Vec<_> = promotions[..new_top_len].to_vec();
