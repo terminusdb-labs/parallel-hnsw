@@ -163,7 +163,7 @@ pub fn main() {
     let mut improvement = f32::MAX;
     eprintln!("Improving index");
     while improvement > 0.001 {
-        qhnsw.improve_index(1.0, 1.0, 1.0, None);
+        qhnsw.improve_index(1.0, 1.0, 1.0, 1.0, None);
         let new_recall = do_test_recall(&qhnsw);
         improvement = new_recall - last_recall;
         last_recall = new_recall;

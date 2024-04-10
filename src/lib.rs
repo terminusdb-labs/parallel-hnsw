@@ -20,7 +20,7 @@ use std::{
 };
 
 use itertools::Itertools;
-use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+use rand::{rngs::StdRng, seq::SliceRandom, thread_rng, Rng, SeedableRng};
 use rand_distr::{Distribution, Exp};
 use rayon::prelude::*;
 use std::fmt::Debug;
@@ -846,7 +846,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
             hnsw.layers.push(layer);
             eprintln!("linking to better neighbors (during construction)");
             let old_layer_count = hnsw.layer_count();
-            hnsw.improve_index(0.01, 0.01, 0.1, None);
+            hnsw.improve_index(0.01, 0.01, 0.1, 1.0, None);
             let new_layer_count = hnsw.layer_count();
             let delta = new_layer_count - old_layer_count;
             if delta > 0 {
@@ -1146,12 +1146,16 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 .unwrap()
                 .node_count()
         );
-        vecs.sort();
         if layer_from_top == 0 {
             // just construct a new hnsw and copy over layer stack
+            // we don't even care about the vectors to promote we found previously.
+            let layer = self.get_layer_from_top(0).unwrap();
+            let mut vecs = layer.nodes.clone();
+            let mut rng = thread_rng();
+            vecs.shuffle(&mut rng);
             let new_top = Self::generate(
                 self.comparator().clone(),
-                vecs.clone(),
+                vecs,
                 self.neighborhood_size,
                 self.neighborhood_size,
                 self.order,
@@ -1167,6 +1171,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 eprintln!("layer count: {}", layer.node_count());
             }
         } else {
+            vecs.sort();
             let mut sizes: Vec<_> = self
                 .layers
                 .iter()
@@ -1179,16 +1184,23 @@ impl<C: Comparator + 'static> Hnsw<C> {
             eprintln!("promotions: {promotions:?}");
             let mut new_top_len = 0;
             let delta = if promotions.len() > layer_from_top {
+                // layer_from_top is an index, so it s corresponding
+                // layer stack size is one bigger.
                 promotions.len() - (layer_from_top + 1)
             } else {
                 0
             };
-            if promotions.len() > layer_from_top + 1 {
+            if delta > 0 {
                 eprintln!("Adding {} more layer(s)", promotions.len() - layer_from_top);
                 // we are going to need at least one more layer
-                let count = promotions[layer_from_top + delta];
+                let count = promotions[delta];
                 eprintln!("top vecs count: {count}");
-                let top_vecs: Vec<_> = vecs.iter().cloned().take(count).collect();
+                let mut top_vecs = self.get_layer_from_top(0).unwrap().nodes.clone();
+                let mut rng = thread_rng();
+                top_vecs.extend(vecs.iter().cloned().take(count));
+                top_vecs.sort();
+                top_vecs.dedup();
+                top_vecs.shuffle(&mut rng);
                 let new_top = Self::generate(
                     self.comparator().clone(),
                     top_vecs.clone(),
@@ -1198,17 +1210,18 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 );
                 let layers = new_top.layers;
                 new_top_len = layers.len();
+                assert_eq!(new_top_len, delta);
                 eprintln!("generated {} new top layers (and extending)", layers.len());
-                // we are replacing layers so let's take out the ones we just replaced
-                let suffix = self.layers[layer_from_top..].to_vec();
+                // having merged the top layer with the promotions, we can throw away the original.
+                let suffix = self.layers[1..].to_vec();
                 self.layers.clear();
                 self.layers.extend(layers);
                 self.layers.extend(suffix);
                 for (i, layer) in self.layers.iter().enumerate() {
                     eprintln!("{i}: layer node count: {}", layer.node_count());
                 }
-                let promotions_suffix: Vec<_> = promotions[layer_from_top + delta + 1..].to_vec();
-                let promotions_prefix: Vec<_> = promotions[..new_top_len].to_vec();
+                let promotions_suffix: Vec<_> = promotions[delta + 1..].to_vec();
+                let promotions_prefix: Vec<_> = vec![0; new_top_len];
                 promotions = promotions_prefix;
                 promotions.extend(promotions_suffix);
                 assert!(promotions.len() == self.layers.len())
@@ -1380,10 +1393,11 @@ impl<C: Comparator + 'static> Hnsw<C> {
 
     pub fn improve_index_at(
         &mut self,
-        layer_from_top: usize,
+        mut layer_from_top: usize,
         promotion_threshold: f32,
         neighbor_threshold: f32,
         recall_proportion: f32,
+        promotion_proportion: f32,
         last_recall: Option<f32>,
     ) -> (f32, usize) {
         // let's start with a neighborhood optimization so we don't overpromote
@@ -1408,23 +1422,26 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 );
 
                 eprintln!("About to promote");
-                if self.promote_at_layer(current_layer_from_top, promotion_threshold) {
+                if self.promote_at_layer(current_layer_from_top, promotion_proportion) {
                     let new_layer_count = self.layer_count();
                     eprintln!("New layer count: {new_layer_count}, old layer count: {layer_count}");
                     let layer_delta = new_layer_count - layer_count;
                     assert!(new_layer_count >= layer_count);
                     eprintln!("We did promote!  With layer delta: {layer_delta}");
+                    eprintln!("original current_layer_from_top is {current_layer_from_top}");
+                    current_layer_from_top += layer_delta;
+                    layer_from_top += layer_delta;
+                    eprintln!("corrected current_layer_from_top is {current_layer_from_top}");
                     recall = self.improve_neighbors_upto(
-                        current_layer_from_top + layer_delta + 1,
+                        current_layer_from_top + 1,
                         neighbor_threshold,
                         recall_proportion,
                         Some(recall),
                     );
                     eprintln!("recall after promotion: {recall}");
-                    current_layer_from_top += 1 + layer_delta;
-                } else {
-                    current_layer_from_top += 1;
                 }
+
+                current_layer_from_top += 1;
             }
             bailout -= 1;
             improvement = recall - last_recall;
@@ -1439,6 +1456,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         promotion_threshold: f32,
         neighbor_threshold: f32,
         recall_proportion: f32,
+        promotion_proportion: f32,
         last_recall: Option<f32>,
     ) -> f32 {
         // let's start with a neighborhood optimization so we don't overpromote
@@ -1455,6 +1473,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 promotion_threshold,
                 neighbor_threshold,
                 recall_proportion,
+                promotion_proportion,
                 None,
             );
             eprintln!("afterwards, layer_from_top is {layer_from_top}");
@@ -1999,7 +2018,7 @@ mod tests {
         eprintln!("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
         eprintln!("Finished building, now improving");
         eprintln!("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
-        hnsw.improve_index(0.1, 0.01, 1.0, None);
+        hnsw.improve_index(0.1, 0.01, 1.0, 1.0, None);
         do_test_recall(&hnsw, 1.0);
         panic!();
     }
@@ -2010,14 +2029,14 @@ mod tests {
         let dimension = 50;
         let mut hnsw: Hnsw<BigComparator> =
             bigvec::make_random_hnsw_with_order(size, dimension, 10);
-        hnsw.improve_index(0.01, 0.01, 1.0, None);
+        hnsw.improve_index(0.01, 0.01, 1.0, 1.0, None);
         do_test_recall(&hnsw, 0.0);
         let mut improvement_count = 0;
         let mut last_recall = 0.0;
         let mut last_improvement = 1.0;
         while last_improvement > 0.001 {
             eprintln!("{improvement_count} time to improve index");
-            hnsw.improve_index(0.01, 0.01, 1.0, None);
+            hnsw.improve_index(0.01, 0.01, 1.0, 1.0, None);
             let new_recall = do_test_recall(&hnsw, 0.0);
             last_improvement = new_recall - last_recall;
             last_recall = new_recall;
@@ -2034,7 +2053,7 @@ mod tests {
         let dimension = 1536;
         let mut hnsw: Hnsw<BigComparator> =
             bigvec::make_random_hnsw_with_size(size, dimension, 12, 12, 24);
-        hnsw.improve_index(0.01, 0.01, 1.0, None);
+        hnsw.improve_index(0.01, 0.01, 1.0, 1.0, None);
         do_test_recall(&hnsw, 0.0);
         panic!()
     }
@@ -2043,7 +2062,7 @@ mod tests {
     fn test_small_index_improvement() {
         let mut hnsw: Hnsw<SillyComparator> = make_simple_hnsw();
         eprintln!("One from bottom: {:?}", hnsw.layers[hnsw.layer_count() - 2]);
-        hnsw.improve_index(0.1, 0.1, 1.0, None);
+        hnsw.improve_index(0.1, 0.1, 1.0, 1.0, None);
         eprintln!(
             "One from bottom after: {:?}",
             hnsw.layers[hnsw.layer_count() - 2]
@@ -2059,7 +2078,7 @@ mod tests {
     #[test]
     fn test_tiny_index_improvement() {
         let mut hnsw: Hnsw<SillyComparator> = make_broken_hnsw();
-        hnsw.improve_index(1.0, 0.1, 1.0, None);
+        hnsw.improve_index(1.0, 0.1, 1.0, 1.0, None);
         let data = &hnsw.layers[hnsw.layer_count() - 1].comparator.data;
         for (i, datum) in data.iter().enumerate() {
             let v = AbstractVector::Unstored(datum);
@@ -2100,7 +2119,7 @@ mod tests {
         let mut hnsw = best_hnsw.unwrap();
         while last_improvement > 0.001 {
             eprintln!("{improvement_count} time to improve index");
-            hnsw.improve_index(0.1, 0.1, 1.0, None);
+            hnsw.improve_index(0.1, 0.1, 1.0, 1.0, None);
             let new_recall = do_test_recall(&hnsw, 0.0);
             last_improvement = new_recall - last_recall;
             last_recall = new_recall;
@@ -2224,8 +2243,8 @@ mod tests {
             .collect();
         let cc = Comparator32 { data: vecs.into() };
         let vids: Vec<VectorId> = (0..100_000).map(VectorId).collect();
-        let mut hnsw: Hnsw<Comparator32> = Hnsw::generate(cc, vids, 24, 48, 12);
-        hnsw.improve_neighbors(0.01, 1.0, None);
+        let mut hnsw: Hnsw<Comparator32> = Hnsw::generate(cc, vids, 12, 12, 12);
+        hnsw.improve_index(0.00001, 0.01, 1.0, 1.0, None);
         panic!()
     }
 }
