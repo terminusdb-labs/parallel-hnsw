@@ -1207,10 +1207,10 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 for layer in self.layers.iter() {
                     eprintln!("layer count: {}", layer.node_count());
                 }
-                let promotions_suffix = &promotions[layer_from_top + delta + 1..];
-                let mut promotions_prefix = vec![0; new_top_len];
-                promotions_prefix.extend(promotions_suffix);
+                let promotions_suffix: Vec<_> = promotions[layer_from_top + delta + 1..].to_vec();
+                let promotions_prefix: Vec<_> = promotions[..new_top_len].to_vec();
                 promotions = promotions_prefix;
+                promotions.extend(promotions_suffix);
                 assert!(promotions.len() == self.layers.len())
             }
 
@@ -1221,6 +1221,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
             eprintln!("promotion sizes after maybe having generated a top {promotions:?}");
 
             for (promotion_id_from_top, promotion_count) in promotions.into_iter().enumerate() {
+                eprintln!("promotion count: {promotion_count}");
                 if promotion_count == 0 {
                     continue;
                 }
@@ -1403,7 +1404,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                     current_layer_from_top + 1,
                     neighbor_threshold,
                     recall_proportion,
-                    Some(recall),
+                    None,
                 );
 
                 eprintln!("About to promote");
