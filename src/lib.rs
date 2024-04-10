@@ -812,11 +812,16 @@ impl<C: Comparator + 'static> Hnsw<C> {
 
     pub fn generate(
         c: C,
-        vs: Vec<VectorId>,
+        mut vs: Vec<VectorId>,
         neighborhood_size: usize,
         zero_layer_neighborhood_size: usize,
         order: usize,
     ) -> Self {
+        // start with a shuffle
+        let mut rng = thread_rng();
+        vs.shuffle(&mut rng);
+        //vs.sort();
+
         let total_size = vs.len();
         assert!(total_size > 0);
         // eprintln!("neighborhood_size: {neighborhood_size}");
@@ -849,7 +854,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
             hnsw.layers.push(layer);
             eprintln!("linking to better neighbors (during construction)");
             let old_layer_count = hnsw.layer_count();
-            hnsw.improve_index(0.01, 0.01, 0.1, 1.0, None);
+            hnsw.improve_index(0.01, 0.01, 0.1, 0.1, None);
             let new_layer_count = hnsw.layer_count();
             let delta = new_layer_count - old_layer_count;
             if delta > 0 {
@@ -1155,8 +1160,8 @@ impl<C: Comparator + 'static> Hnsw<C> {
             let layer = self.get_layer_from_top(0).unwrap();
             let mut old_nodes = layer.nodes.clone();
             vecs.extend(old_nodes);
-            let mut rng = thread_rng();
-            vecs.shuffle(&mut rng);
+            vecs.sort();
+            vecs.dedup(); // shouldn't do anything
             let new_top = Self::generate(
                 self.comparator().clone(),
                 vecs,
@@ -1175,7 +1180,6 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 eprintln!("layer count: {}", layer.node_count());
             }
         } else {
-            vecs.sort();
             let mut sizes: Vec<_> = self
                 .layers
                 .iter()
@@ -1185,24 +1189,41 @@ impl<C: Comparator + 'static> Hnsw<C> {
             sizes.reverse();
             eprintln!("sizes: {sizes:?}");
             let mut new_sizes =
-                calculate_partitions_from_bottom(sizes.last().unwrap() + vecs.len(), self.order);
+                calculate_partitions_from_bottom(sizes.first().unwrap() + vecs.len(), self.order);
+            eprintln!("new sizes: {new_sizes:?}");
+            if new_sizes.len() < sizes.len() {
+                // apparently our current stack is pretty suboptimal. That is bound to happen after a couple of promotions.
+                // our 'solution' is just to pad new_sizes with zeroes. The ssaturating sub below will ensure that this results in 0 promotions into these unbalanced top layers.
+                new_sizes.resize(sizes.len(), 0);
+            }
 
-            let new_top_needed = new_sizes.len() > sizes.len();
+            let retop_upto = new_sizes.len() - sizes.len();
             new_sizes.truncate(sizes.len());
+            eprintln!("truncated new: {new_sizes:?}");
 
             let mut promotion_sizes: Vec<_> = new_sizes
                 .into_iter()
                 .zip(sizes.into_iter())
-                .map(|(s1, s2)| s1 - s2)
+                .map(|(s1, s2)| s1.saturating_sub(s2))
                 .collect();
-            let offset = if new_top_needed {
+            eprintln!("promotion sizes: {promotion_sizes:?}");
+            let offset = if retop_upto != 0 {
                 // this briefly breaks the invariant about nodes
                 // always existing in layers below.
-                let promotion_into_top = promotion_sizes.pop().unwrap();
-                let mut top_vecs = self.get_layer_from_top(0).unwrap().nodes.clone();
+                let retop_index_in_promotions = promotion_sizes.len() - retop_upto;
+                let promotion_into_top = promotion_sizes[retop_index_in_promotions];
+                promotion_sizes.truncate(retop_index_in_promotions);
+                //let promotion_into_top = promotion_sizes.pop().unwrap();
+                let mut top_vecs = self
+                    .get_layer_from_top(retop_upto - 1)
+                    .unwrap()
+                    .nodes
+                    .clone();
                 top_vecs.extend(vecs[..promotion_into_top].iter().copied());
-                let mut rng = thread_rng();
-                top_vecs.shuffle(&mut rng);
+                //let mut rng = thread_rng();
+                //top_vecs.shuffle(&mut rng);
+                top_vecs.sort();
+                top_vecs.dedup();
 
                 let new_top = Self::generate(
                     self.comparator().clone(),
@@ -1215,27 +1236,27 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 let new_top_len = layers.len();
                 eprintln!("generated {} new top layers (and extending)", layers.len());
                 // having merged the top layer with the promotions, we can throw away the original.
-                let suffix = self.layers[1..].to_vec();
+                let suffix = self.layers[retop_upto..].to_vec();
                 self.layers.clear();
                 self.layers.extend(layers);
                 self.layers.extend(suffix);
                 for (i, layer) in self.layers.iter().enumerate() {
                     eprintln!("{i}: layer node count: {}", layer.node_count());
                 }
-                new_top_len - 1
+                new_top_len // note, we already popped one off promotion_sizes, so we want to start /after/ the new top
             } else {
-                0
+                0 // we have not generated a new top, and therefore the first extend starts at layer 0
             };
-            let corrected_layer_from_top = layer_from_top + offset;
+            promotion_sizes.reverse();
             for (i, size) in promotion_sizes.into_iter().enumerate() {
-                let current_layer_from_top = corrected_layer_from_top - i;
+                let current_layer_from_top = offset + i;
                 eprintln!("layer_id_from_top: {current_layer_from_top}");
                 let layer = self.get_layer_from_top(current_layer_from_top).unwrap();
                 let vecs_to_promote: Vec<_> = vecs
                     .iter()
                     .cloned()
-                    .take(size)
                     .filter(|v| layer.get_node(*v).is_none())
+                    .take(size)
                     .collect();
                 let current_layer_from_bottom =
                     self.layer_from_top_to_layer(current_layer_from_top);
@@ -1376,7 +1397,11 @@ impl<C: Comparator + 'static> Hnsw<C> {
             let recall = self.stochastic_recall_at(upto - 1, recall_proportion);
             last_improvement = recall - last_recall;
             last_recall = recall;
-            eprintln!("recall {recall} (improvement: {last_improvement})");
+            eprintln!(
+                "recall at {}/{} {recall} (improvement: {last_improvement})",
+                upto,
+                self.layer_count()
+            );
         }
 
         last_recall
@@ -1439,7 +1464,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
             eprintln!("outer loop improvement: {improvement}");
         }
 
-        (recall, current_layer_from_top)
+        (recall, layer_from_top)
     }
 
     pub fn improve_index(
