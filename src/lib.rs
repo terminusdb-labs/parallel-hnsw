@@ -1422,13 +1422,12 @@ impl<C: Comparator + 'static> Hnsw<C> {
 
         let mut improvement = 1.0;
         let mut bailout = 1;
-        let mut current_layer_from_top = layer_from_top;
+        let mut current_layer_from_top;
         while improvement >= promotion_threshold && recall < 1.0 && bailout != 0 {
             eprintln!("improve_index_at {improvement}>={promotion_threshold} && {recall} < 1.0 && {bailout} != 0");
             let last_recall = recall;
             current_layer_from_top = 0;
             while current_layer_from_top <= layer_from_top && bailout != 0 {
-                let layer_count = self.layer_count();
                 eprintln!("improve_index_at is going to call improve_neighbors_upto");
                 recall = self.improve_neighbors_upto(
                     current_layer_from_top + 1,
@@ -1437,27 +1436,19 @@ impl<C: Comparator + 'static> Hnsw<C> {
                     None,
                 );
 
-                eprintln!("About to promote");
-                if self.promote_at_layer(current_layer_from_top, promotion_proportion) {
-                    let new_layer_count = self.layer_count();
-                    eprintln!("New layer count: {new_layer_count}, old layer count: {layer_count}");
-                    let layer_delta = new_layer_count - layer_count;
-                    assert!(new_layer_count >= layer_count);
-                    eprintln!("We did promote!  With layer delta: {layer_delta}");
-                    eprintln!("original current_layer_from_top is {current_layer_from_top}");
-                    current_layer_from_top += layer_delta;
-                    layer_from_top += layer_delta;
-                    eprintln!("corrected current_layer_from_top is {current_layer_from_top}");
-                    recall = self.improve_neighbors_upto(
-                        current_layer_from_top + 1,
-                        neighbor_threshold,
-                        recall_proportion,
-                        Some(recall),
-                    );
-                    eprintln!("recall after promotion: {recall}");
-                }
-
                 current_layer_from_top += 1;
+            }
+
+            eprintln!("About to promote");
+            if self.promote_at_layer(self.layer_count() - 1, promotion_proportion) {
+                eprintln!("corrected current_layer_from_top is {current_layer_from_top}");
+                recall = self.improve_neighbors_upto(
+                    self.layer_count(),
+                    neighbor_threshold,
+                    recall_proportion,
+                    Some(recall),
+                );
+                eprintln!("recall after promotion: {recall}");
             }
             bailout -= 1;
             improvement = recall - last_recall;
@@ -2070,7 +2061,7 @@ mod tests {
         let size = 100_000;
         let dimension = 1536;
         let mut hnsw: Hnsw<BigComparator> =
-            bigvec::make_random_hnsw_with_size(size, dimension, 12, 12, 24);
+            bigvec::make_random_hnsw_with_size(size, dimension, 24, 48, 24);
         hnsw.improve_index(0.01, 0.01, 1.0, 1.0, None);
         do_test_recall(&hnsw, 0.0);
         panic!()
@@ -2262,7 +2253,7 @@ mod tests {
         let cc = Comparator32 { data: vecs.into() };
         let vids: Vec<VectorId> = (0..99_999).map(VectorId).collect();
         let mut hnsw: Hnsw<Comparator32> = Hnsw::generate(cc, vids, 12, 12, 10);
-        hnsw.improve_index(0.00001, 0.01, 1.0, 1.0, None);
+        hnsw.improve_index(0.00001, 0.01, 1.0, 0.1, None);
         panic!()
     }
 
