@@ -289,7 +289,7 @@ impl<
             centroid_m0,
             centroid_order,
         );
-        centroid_hnsw.improve_index(0.001, 0.01, 1.0, 1.0, None);
+        centroid_hnsw.improve_index(0.001, 0.001, 1.0, 0.1, None);
         //centroid_hnsw.improve_neighbors(0.01, 1.0);
 
         let centroid_quantizer: HnswQuantizer<
