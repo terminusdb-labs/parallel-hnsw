@@ -1158,7 +1158,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
             // just construct a new hnsw and copy over layer stack
             // we don't even care about the vectors to promote we found previously.
             let layer = self.get_layer_from_top(0).unwrap();
-            let mut old_nodes = layer.nodes.clone();
+            let old_nodes = layer.nodes.clone();
             vecs.extend(old_nodes);
             vecs.sort();
             vecs.dedup(); // shouldn't do anything
@@ -1203,7 +1203,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
 
             let mut promotion_sizes: Vec<_> = new_sizes
                 .into_iter()
-                .zip(sizes.into_iter())
+                .zip(sizes)
                 .map(|(s1, s2)| s1.saturating_sub(s2))
                 .collect();
             eprintln!("promotion sizes: {promotion_sizes:?}");
@@ -1510,6 +1510,7 @@ impl<C: Serializable + Clone> Hnsw<C> {
     }
 }
 
+#[allow(unused)]
 fn cross_compare_vectors<C: Comparator + 'static>(
     vecs: &Vec<VectorId>,
     borrowed_comparator: &C,
@@ -1709,6 +1710,7 @@ fn calculate_partitions(total_size: usize, order: usize) -> Vec<usize> {
     partitions
 }
 
+#[allow(unused)]
 fn calculate_partitions_for_additions(
     sizes_from_bottom: &[usize],
     new_vecs: usize,
@@ -1775,8 +1777,6 @@ mod tests {
     use std::sync::Arc;
 
     use rand_distr::Uniform;
-
-    use crate::search::assert_layer_invariants;
 
     use super::bigvec::*;
     use super::*;

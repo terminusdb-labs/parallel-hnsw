@@ -189,6 +189,7 @@ impl<
         FullComparator,
     >
 {
+    #[allow(unused)]
     fn kmeans_centroids(
         number_of_centroids: usize,
         subvector_selection_size: usize,
@@ -463,13 +464,7 @@ impl<
 #[cfg(test)]
 mod tests {
     fn clamp_01(f: f32) -> f32 {
-        if f <= 0.0 {
-            0.0
-        } else if f >= 1.0 {
-            1.0
-        } else {
-            f
-        }
+        f.clamp(0.0, 1.0)
     }
 
     fn normalize_cosine_distance(f: f32) -> f32 {
@@ -567,11 +562,11 @@ mod tests {
         fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
             let v_reconstruct1: Vec<f32> = v1
                 .iter()
-                .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter().copied())
+                .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).iter().copied())
                 .collect();
             let v_reconstruct2: Vec<f32> = v2
                 .iter()
-                .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter().copied())
+                .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).iter().copied())
                 .collect();
             let mut ar1 = [0.0_f32; 1536];
             let mut ar2 = [0.0_f32; 1536];
@@ -749,11 +744,11 @@ mod tests {
         fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
             let v_reconstruct1: Vec<f32> = v1
                 .iter()
-                .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter().copied())
+                .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).iter().copied())
                 .collect();
             let v_reconstruct2: Vec<f32> = v2
                 .iter()
-                .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter().copied())
+                .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).iter().copied())
                 .collect();
             v_reconstruct1
                 .iter()

@@ -47,6 +47,7 @@ pub fn serialize_hnsw<C: Serializable, P: AsRef<Path>>(
     let mut hnsw_meta_file = OpenOptions::new()
         .write(true)
         .create(true)
+        .truncate(true)
         .open(hnsw_meta)?;
     eprintln!("opened hnsw file");
 
@@ -76,6 +77,7 @@ pub fn serialize_hnsw<C: Serializable, P: AsRef<Path>>(
         let mut hnsw_layer_meta_file: std::fs::File = OpenOptions::new()
             .write(true)
             .create(true)
+            .truncate(true)
             .open(&hnsw_layer_meta)?;
         eprintln!("opened {hnsw_layer_meta:?} for layer {layer_number}");
         let neighborhood_size = layer.neighborhood_size;
@@ -93,6 +95,7 @@ pub fn serialize_hnsw<C: Serializable, P: AsRef<Path>>(
         let mut hnsw_layer_nodes_file: std::fs::File = OpenOptions::new()
             .write(true)
             .create(true)
+            .truncate(true)
             .open(&hnsw_layer_nodes)?;
         eprintln!("opened {hnsw_layer_nodes:?} for layer {layer_number}");
         let node_slice_u8: &[u8] = unsafe {
@@ -110,6 +113,7 @@ pub fn serialize_hnsw<C: Serializable, P: AsRef<Path>>(
         let mut hnsw_layer_neighbors_file = OpenOptions::new()
             .write(true)
             .create(true)
+            .truncate(true)
             .open(&hnsw_layer_neighbors)?;
         eprintln!("opened {hnsw_layer_neighbors_file:?} for layer {layer_number}");
         let neighbor_slice_u8: &[u8] = unsafe {
