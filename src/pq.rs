@@ -280,7 +280,7 @@ impl<
         let centroid_comparator = CentroidComparator::new(centroids);
         let centroid_m = 24;
         let centroid_m0 = 48;
-        let centroid_order = 12;
+        let centroid_order = 48;
         let mut quantized_comparator = QuantizedComparator::new(&centroid_comparator);
         let mut centroid_hnsw: Hnsw<CentroidComparator> = Hnsw::generate(
             centroid_comparator,
@@ -313,7 +313,7 @@ impl<
 
         let m = 24;
         let m0 = 48;
-        let order = 12;
+        let order = 48;
         eprintln!("generating");
         let hnsw: Hnsw<QuantizedComparator> =
             Hnsw::generate(quantized_comparator, vids, m, m0, order);

@@ -1088,7 +1088,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                     1,
                     Some(vector),
                 );
-                for (neighbor_vec, distance) in matches.into_iter().take(10) {
+                for (neighbor_vec, distance) in matches.into_iter().take(self.neighborhood_size) {
                     if neighbor_vec == vector {
                         break;
                     }
@@ -2247,18 +2247,17 @@ mod tests {
     #[test]
     fn test_euclidean() {
         let mut prng = StdRng::seed_from_u64(42);
-        let vecs: Vec<Vec<f32>> = (0..99_999)
-            .map(move |_| random_vec(&mut prng, 32))
-            .collect();
+        let size = 100_000;
+        let vecs: Vec<Vec<f32>> = (0..size).map(move |_| random_vec(&mut prng, 32)).collect();
         let cc = Comparator32 { data: vecs.into() };
-        let vids: Vec<VectorId> = (0..99_999).map(VectorId).collect();
-        let mut hnsw: Hnsw<Comparator32> = Hnsw::generate(cc, vids, 12, 12, 10);
-        hnsw.improve_index(0.00001, 0.01, 1.0, 0.1, None);
+        let vids: Vec<VectorId> = (0..size).map(VectorId).collect();
+        let mut hnsw: Hnsw<Comparator32> = Hnsw::generate(cc, vids, 12, 24, 24);
+        hnsw.improve_index(0.01, 0.001, 1.0, 0.1, None);
         panic!()
     }
 
     #[test]
-    fn something() {
+    fn test_calculate_partitions_for_additions() {
         let sizes = [1000];
         let number_of_promotions = 10;
         let order = 10;
