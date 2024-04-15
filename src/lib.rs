@@ -854,7 +854,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
             hnsw.layers.push(layer);
             eprintln!("linking to better neighbors (during construction)");
             let old_layer_count = hnsw.layer_count();
-            hnsw.improve_index(0.01, 0.01, 0.1, 0.1, None);
+            hnsw.improve_index(0.01, 0.01, 0.1, 0.01, None);
             let new_layer_count = hnsw.layer_count();
             let delta = new_layer_count - old_layer_count;
             if delta > 0 {
