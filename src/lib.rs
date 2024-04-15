@@ -9,7 +9,7 @@ pub use serialize::SerializationError;
 pub use types::*;
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{hash_map::Entry, HashMap, HashSet},
     ops::Deref,
     path::Path,
     slice::Iter,
@@ -633,6 +633,21 @@ impl<C> Hnsw<C> {
 }
 
 impl<C: Comparator + 'static> Hnsw<C> {
+    pub fn search_upto(
+        &self,
+        v: AbstractVector<C::T>,
+        number_of_candidates: usize,
+        probe_depth: usize,
+        upto_layer_from_top: usize,
+    ) -> Vec<(VectorId, f32)> {
+        search::search_layers(
+            v,
+            number_of_candidates,
+            &self.layers[..upto_layer_from_top],
+            probe_depth,
+            None,
+        )
+    }
     pub fn search(
         &self,
         v: AbstractVector<C::T>,
@@ -980,7 +995,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         layer.reachables_from(node, check)
     }
 
-    pub fn discover_vectors_to_promote(&self, layer_id_from_top: usize) -> Vec<VectorId> {
+    pub fn discover_unreachable_vectors(&self, layer_id_from_top: usize) -> Vec<VectorId> {
         //const THRESHOLD: usize = 42;
 
         let layers = &self.layers[0..=layer_id_from_top];
@@ -1133,9 +1148,62 @@ impl<C: Comparator + 'static> Hnsw<C> {
         count
     }
 
+    fn filter_promotion_candidates(
+        &self,
+        layer_from_top: usize,
+        vecs: Vec<VectorId>,
+    ) -> Vec<VectorId> {
+        let layer = self.get_layer_from_top(layer_from_top).unwrap();
+        let mut set: HashMap<NodeId, usize> = HashMap::new();
+        // - do histogramming
+        eprintln!("generate histogram");
+        for v in vecs {
+            let node = layer.get_node(v).unwrap();
+            let neighbors = layer.get_neighbors(node);
+            for n in neighbors {
+                match set.entry(*n) {
+                    Entry::Occupied(mut o) => *o.get_mut() += 1,
+                    Entry::Vacant(o) => {
+                        o.insert(1);
+                    }
+                }
+            }
+        }
+        let mut histogram: Vec<_> = set.into_iter().collect();
+        // - pick top histogrammed
+        eprintln!("sort histogram");
+        histogram.sort_by_key(|(_, count)| *count);
+        let mut promotion_selection = Vec::new();
+        eprintln!("find promotions (out of {})", histogram.len());
+        while let Some((node, _)) = histogram.pop() {
+            if promotion_selection.par_iter().any(|(v, radius)| {
+                self.comparator().compare_vec(
+                    AbstractVector::Stored(*v),
+                    AbstractVector::Stored(layer.get_vector(node)),
+                ) < *radius
+            }) {
+                continue;
+            }
+
+            // - figure out distance as supernode
+            let vec = layer.get_vector(node);
+            let result = self.search_upto(
+                AbstractVector::Stored(vec),
+                layer.neighborhood_size,
+                2,
+                layer_from_top,
+            );
+            let radius = result[0].1; // todo gotta tune this hypersphere
+            promotion_selection.push((vec, radius));
+        }
+        eprintln!("done finding promotions");
+
+        promotion_selection.into_iter().map(|(v, _)| v).collect()
+    }
+
     pub fn promote_at_layer(&mut self, layer_from_top: usize, max_proportion: f32) -> bool {
         eprintln!("promoting batch at layer from top: {layer_from_top}");
-        let mut vecs = self.discover_vectors_to_promote(layer_from_top);
+        let mut vecs = self.discover_unreachable_vectors(layer_from_top);
         for i in 0..self.layer_count() {
             eprintln!("{}: Layer size is: {}", i, self.layers[i].node_count());
         }
@@ -1144,8 +1212,9 @@ impl<C: Comparator + 'static> Hnsw<C> {
         }
         if max_proportion < 1.0 {
             let vec_length = (vecs.len() as f32 * max_proportion) as usize;
-            vecs = vecs.into_iter().take(vec_length).collect();
+            vecs.truncate(vec_length);
         }
+        vecs = self.filter_promotion_candidates(layer_from_top, vecs);
         eprintln!(
             "vec len for promotion: {}@{} (out of {})",
             vecs.len(),
@@ -1409,7 +1478,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
 
     pub fn improve_index_at(
         &mut self,
-        mut layer_from_top: usize,
+        layer_from_top: usize,
         promotion_threshold: f32,
         neighbor_threshold: f32,
         recall_proportion: f32,
@@ -2011,9 +2080,9 @@ mod tests {
         let n1 = layer.discover_nodes_to_promote(supers_1);
         let n2 = layer.discover_nodes_to_promote(supers_1);
         assert_eq!(n1, n2);
-        let v1 = hnsw.discover_vectors_to_promote(0);
+        let v1 = hnsw.discover_unreachable_vectors(0);
         eprintln!("{v1:?}");
-        let v2 = hnsw.discover_vectors_to_promote(0);
+        let v2 = hnsw.discover_unreachable_vectors(0);
         assert_eq!(v1, v2);
         panic!();
     }
