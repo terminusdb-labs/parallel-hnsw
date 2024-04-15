@@ -1139,12 +1139,12 @@ impl<C: Comparator + 'static> Hnsw<C> {
         for i in 0..self.layer_count() {
             eprintln!("{}: Layer size is: {}", i, self.layers[i].node_count());
         }
-        if max_proportion < 1.0 {
-            let vec_length = vecs.len();
-            vecs = vecs.into_iter().take(vec_length).collect();
-        }
         if vecs.is_empty() {
             return false;
+        }
+        if max_proportion < 1.0 {
+            let vec_length = (vecs.len() as f32 * max_proportion) as usize;
+            vecs = vecs.into_iter().take(vec_length).collect();
         }
         eprintln!(
             "vec len for promotion: {}@{} (out of {})",
