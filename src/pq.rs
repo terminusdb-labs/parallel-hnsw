@@ -240,34 +240,25 @@ impl<
         comparator: &FullComparator,
     ) -> Vec<[f32; CENTROID_SIZE]> {
         let selection = comparator.selection(number_of_centroids);
-        let mut rng = thread_rng();
-        let mut selected: Vec<_> = selection
+        let mut centroid_candidates: Vec<_> = selection
             .into_iter()
-            .map(|v| {
-                let quantum = rng.gen_range(0..QUANTIZED_SIZE);
-                let offset = quantum * CENTROID_SIZE;
-                let mut arr: [f32; CENTROID_SIZE] = [0.0; CENTROID_SIZE];
-                arr.copy_from_slice(&v[offset..(offset + CENTROID_SIZE)]);
+            .flat_map(|v| {
+                (0..QUANTIZED_SIZE).map(move |quantum| {
+                    let offset = quantum * CENTROID_SIZE;
+                    let mut arr: [f32; CENTROID_SIZE] = [0.0; CENTROID_SIZE];
+                    arr.copy_from_slice(&v[offset..(offset + CENTROID_SIZE)]);
 
-                arr
+                    arr
+                })
             })
             .collect();
+        centroid_candidates.sort_by_key(|c| c.iter().map(|x| OrderedFloat(*x)).collect::<Vec<_>>());
+        centroid_candidates.dedup();
+        let mut rng = thread_rng();
+        centroid_candidates.shuffle(&mut rng);
+        centroid_candidates.truncate(number_of_centroids);
 
-        eprintln!("done selecting centroids, now dedupping..");
-        let original_len = selected.len();
-        {
-            let borrow: &mut [[OrderedFloat; CENTROID_SIZE]] =
-                unsafe { std::mem::transmute(&mut selected[..]) };
-            borrow.sort();
-        }
-        selected.dedup();
-        let new_len = selected.len();
-        if original_len != new_len {
-            eprintln!("number of centroids {original_len}->{new_len}");
-        }
-        selected.shuffle(&mut rng);
-
-        selected
+        centroid_candidates
     }
 
     pub fn new(number_of_centroids: usize, comparator: FullComparator) -> Self {
