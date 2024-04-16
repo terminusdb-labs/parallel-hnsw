@@ -140,7 +140,7 @@ pub fn search_layers_noisy<C: Comparator, L: AsRef<Layer<C>>>(
         );
         last_index_distance = index_distance;
         if noisy {
-            eprintln!("closest: {closest:?}");
+            //eprintln!("closest: {closest:?}");
         }
         candidates.merge_pairs(&closest);
     }
@@ -164,10 +164,10 @@ pub fn assert_layer_invariants<C: Comparator, L: AsRef<Layer<C>>>(layers: &[L]) 
             }
             last_node = Some(*node);
             if next_layer.nodes.binary_search(node).is_err() {
-                eprintln!("{:?}", layers[i].as_ref().nodes);
+                //eprintln!("{:?}", layers[i].as_ref().nodes);
                 eprintln!("{:?}", layers[i].as_ref().neighbors);
 
-                eprintln!("{:?}", layers[i + 1].as_ref().nodes);
+                //eprintln!("{:?}", layers[i + 1].as_ref().nodes);
                 eprintln!("{:?}", layers[i + 1].as_ref().neighbors);
 
                 panic!(

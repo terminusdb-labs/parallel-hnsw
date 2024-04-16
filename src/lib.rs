@@ -2096,7 +2096,7 @@ mod tests {
         eprintln!("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
         eprintln!("Finished building, now improving");
         eprintln!("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
-        hnsw.improve_index(0.1, 0.01, 1.0, 1.0, None);
+        hnsw.improve_index(0.1, 0.001, 1.0, 0.1, None);
         do_test_recall(&hnsw, 1.0);
         panic!();
     }

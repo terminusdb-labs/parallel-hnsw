@@ -7,7 +7,7 @@ use rand_distr::Uniform;
 use rayon::prelude::*;
 
 pub fn make_random_hnsw(count: usize, dimension: usize) -> Hnsw<BigComparator> {
-    let order = 24;
+    let order = 12;
     make_random_hnsw_with_order(count, dimension, order)
 }
 
