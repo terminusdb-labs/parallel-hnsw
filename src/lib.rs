@@ -1206,7 +1206,10 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 Entry::Vacant(o) => {
                     let mut layer_histo = HashMap::new();
                     for n in neighbors {
-                        layer_histo.insert(*n, 1);
+                        let neighbor_vector = order_layer.get_vector(*n);
+                        if vecs.binary_search(&neighbor_vector).is_ok() {
+                            layer_histo.insert(*n, 1);
+                        }
                     }
                     o.insert(layer_histo);
                 }
@@ -1273,10 +1276,10 @@ impl<C: Comparator + 'static> Hnsw<C> {
         if max_proportion < 1.0 {
             let vec_length = (vecs.len() as f32 * max_proportion) as usize;
             vecs.truncate(vec_length);
-        }
-        // check after proportion
-        if vecs.is_empty() {
-            return false;
+            // check after proportion
+            if vecs.is_empty() {
+                return false;
+            }
         }
         let order_vecs = self.filter_promotion_candidates(layer_from_top, vecs);
         for (layer_from_top, mut vecs) in order_vecs {
@@ -2230,7 +2233,7 @@ mod tests {
         eprintln!("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
         eprintln!("Finished building, now improving");
         eprintln!("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
-        hnsw.improve_index(0.1, 0.001, 1.0, 1.0, None);
+        hnsw.improve_index(0.01, 0.001, 1.0, 1.0, None);
         do_test_recall(&hnsw, 1.0);
         panic!();
     }
