@@ -115,8 +115,7 @@ impl<C> Layer<C> {
 
     pub fn get_vector(&self, n: NodeId) -> VectorId {
         if n.0 > self.nodes.len() {
-            eprintln!("nodes: {:?}", self.nodes);
-            eprintln!("neighborhood: {:?}", self.neighbors);
+            eprintln!("n.0: {} for node length {}", n.0, self.nodes.len());
         }
         self.nodes[n.0]
     }
