@@ -1,10 +1,12 @@
 pub mod bigvec;
 pub mod pq;
 mod priority_queue;
+pub mod progress;
 mod search;
 pub mod serialize;
 mod types;
 
+use progress::ProgressMonitor;
 pub use serialize::SerializationError;
 pub use types::*;
 
@@ -831,6 +833,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         neighborhood_size: usize,
         zero_layer_neighborhood_size: usize,
         order: usize,
+        progress: &mut dyn ProgressMonitor,
     ) -> Self {
         // start with a shuffle
         let mut rng = thread_rng();
@@ -842,6 +845,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         // eprintln!("neighborhood_size: {neighborhood_size}");
         // eprintln!("total_size: {total_size}");
         // eprintln!("layer count: {layer_count}");
+        let _keep_alive = progress.keep_alive();
         let mut partitions = calculate_partitions(total_size, order);
         eprintln!("generate with partitions: {partitions:?}");
         assert!(!partitions.is_empty());
@@ -869,7 +873,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
             hnsw.layers.push(layer);
             eprintln!("linking to better neighbors (during construction)");
             let old_layer_count = hnsw.layer_count();
-            hnsw.improve_index(0.01, 0.01, 0.1, 0.01, None);
+            hnsw.improve_index(0.01, 0.01, 0.1, 0.01, None, progress);
             let new_layer_count = hnsw.layer_count();
             let delta = new_layer_count - old_layer_count;
             if delta > 0 {
@@ -1237,6 +1241,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 self.neighborhood_size,
                 self.neighborhood_size,
                 self.order,
+                &mut (),
             );
             let mut layers = new_top.layers;
             eprintln!(
@@ -1300,6 +1305,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                     self.neighborhood_size,
                     self.neighborhood_size,
                     self.order,
+                    &mut (),
                 );
                 let layers = new_top.layers;
                 let new_top_len = layers.len();
@@ -1534,8 +1540,10 @@ impl<C: Comparator + 'static> Hnsw<C> {
         recall_proportion: f32,
         promotion_proportion: f32,
         last_recall: Option<f32>,
+        progress: &mut dyn ProgressMonitor,
     ) -> f32 {
         // let's start with a neighborhood optimization so we don't overpromote
+        let _guard = progress.keep_alive();
         let mut recall = last_recall.unwrap_or_else(|| self.stochastic_recall(recall_proportion));
 
         let mut layer_from_top = 0;

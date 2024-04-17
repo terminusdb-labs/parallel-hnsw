@@ -36,7 +36,7 @@ fn make_random_scalar_hnsw(count: usize) -> Hnsw<ScalarComparator> {
     let m = 24;
     let m0 = 48;
     let order = 24;
-    let hnsw: Hnsw<ScalarComparator> = Hnsw::generate(c, vs, m, m0, order);
+    let hnsw: Hnsw<ScalarComparator> = Hnsw::generate(c, vs, m, m0, order, &mut ());
     hnsw
 }
 

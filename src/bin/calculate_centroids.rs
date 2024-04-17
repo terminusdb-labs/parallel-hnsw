@@ -130,7 +130,7 @@ pub fn main() {
     let m = 24;
     let m0 = 48;
     let order = 24;
-    let hnsw: Hnsw<BigComparator> = Hnsw::generate(c, vectors, m, m0, order);
+    let hnsw: Hnsw<BigComparator> = Hnsw::generate(c, vectors, m, m0, order, &mut ());
     let vec_number = 1_000_000;
     let vecs: Vec<Vec<f32>> = (0..vec_number)
         .into_par_iter()
@@ -157,13 +157,13 @@ pub fn main() {
         / qvecs.len() as f32;
     eprintln!("Average reconstruction cost: {avg_reconstruction_cost}");
     cc.data = Arc::new(qvecs);
-    let mut qhnsw: Hnsw<CentroidComparator> = Hnsw::generate(cc, vec_ids, m, m0, order);
+    let mut qhnsw: Hnsw<CentroidComparator> = Hnsw::generate(cc, vec_ids, m, m0, order, &mut ());
     let initial_recall = do_test_recall(&qhnsw);
     let mut last_recall = initial_recall;
     let mut improvement = f32::MAX;
     eprintln!("Improving index");
     while improvement > 0.001 {
-        qhnsw.improve_index(1.0, 1.0, 1.0, 1.0, None);
+        qhnsw.improve_index(1.0, 1.0, 1.0, 1.0, None, &mut ());
         let new_recall = do_test_recall(&qhnsw);
         improvement = new_recall - last_recall;
         last_recall = new_recall;

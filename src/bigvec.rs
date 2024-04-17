@@ -37,7 +37,7 @@ pub fn make_random_hnsw_with_size(
         data: Arc::new(data),
     };
     let vs: Vec<_> = (0..count).map(VectorId).collect();
-    let hnsw: Hnsw<BigComparator> = Hnsw::generate(c, vs, m, m0, order);
+    let hnsw: Hnsw<BigComparator> = Hnsw::generate(c, vs, m, m0, order, &mut ());
     hnsw
 }
 

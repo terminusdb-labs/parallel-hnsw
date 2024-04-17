@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use crate::{AbstractVector, Comparator, Hnsw, OrderedFloat, Serializable, VectorId};
+use crate::{
+    progress::ProgressMonitor, AbstractVector, Comparator, Hnsw, OrderedFloat, Serializable,
+    VectorId,
+};
 use chrono::Utc;
 use linfa::traits::Fit;
 use linfa::DatasetBase;
@@ -261,7 +264,11 @@ impl<
         centroid_candidates
     }
 
-    pub fn new(number_of_centroids: usize, comparator: FullComparator) -> Self {
+    pub fn new(
+        number_of_centroids: usize,
+        comparator: FullComparator,
+        progress: &mut dyn ProgressMonitor,
+    ) -> Self {
         //let centroids =
         //    Self::kmeans_centroids(number_of_centroids, 1 * number_of_centroids, &comparator);
         let centroids = Self::random_centroids(number_of_centroids, &comparator);
@@ -279,8 +286,9 @@ impl<
             centroid_m,
             centroid_m0,
             centroid_order,
+            progress,
         );
-        centroid_hnsw.improve_index(0.001, 0.001, 1.0, 0.1, None);
+        centroid_hnsw.improve_index(0.001, 0.001, 1.0, 0.1, None, progress);
         //centroid_hnsw.improve_neighbors(0.01, 1.0);
 
         let centroid_quantizer: HnswQuantizer<
@@ -293,13 +301,16 @@ impl<
         };
         let mut vids: Vec<VectorId> = Vec::new();
         eprintln!("quantizing");
-        for chunk in comparator.vector_chunks() {
-            let quantized: Vec<_> = chunk
-                .into_par_iter()
-                .map(|v| centroid_quantizer.quantize(&v))
-                .collect();
+        {
+            let _guard = progress.keep_alive(); // TODO keep track
+            for chunk in comparator.vector_chunks() {
+                let quantized: Vec<_> = chunk
+                    .into_par_iter()
+                    .map(|v| centroid_quantizer.quantize(&v))
+                    .collect();
 
-            vids.extend(quantized_comparator.store(Box::new(quantized.into_iter())));
+                vids.extend(quantized_comparator.store(Box::new(quantized.into_iter())));
+            }
         }
 
         let m = 24;
@@ -307,7 +318,7 @@ impl<
         let order = 48;
         eprintln!("generating");
         let hnsw: Hnsw<QuantizedComparator> =
-            Hnsw::generate(quantized_comparator, vids, m, m0, order);
+            Hnsw::generate(quantized_comparator, vids, m, m0, order, progress);
         Self {
             quantizer: centroid_quantizer,
             hnsw,
@@ -347,6 +358,7 @@ impl<
         recall_proportion: f32,
         promotion_proportion: f32,
         last_recall: Option<f32>,
+        progress: &mut dyn ProgressMonitor,
     ) -> f32 {
         self.hnsw.improve_index(
             promotion_threshold,
@@ -354,6 +366,7 @@ impl<
             recall_proportion,
             promotion_proportion,
             last_recall,
+            progress,
         )
     }
     pub fn improve_neighbors(
