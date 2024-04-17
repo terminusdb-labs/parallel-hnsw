@@ -143,9 +143,9 @@ impl<C> Layer<C> {
         &self.neighbors[first_idx..final_idx]
     }
 
-    pub fn get_neighbors_mut(&mut self, n: NodeId) -> &mut [NodeId] {
+    pub fn get_neighborhood_mut(&mut self, n: NodeId) -> &mut [NodeId] {
         let first_idx = self.neighborhood_size * n.0;
-        let final_idx = self.get_final_neighbor_idx(n);
+        let final_idx = self.neighborhood_size * (n.0 + 1);
         &mut self.neighbors[first_idx..final_idx]
     }
 
@@ -1672,7 +1672,7 @@ fn initialize_new_neighborhoods_into_layer<C: Comparator + 'static>(
     layer: &mut Layer<C>,
 ) {
     for node in new_nodes_map {
-        let neighbors = layer.get_neighbors_mut(NodeId(*node));
+        let neighbors = layer.get_neighborhood_mut(NodeId(*node));
         neighbors.fill(NodeId(!0));
     }
 }
