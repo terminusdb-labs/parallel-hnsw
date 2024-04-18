@@ -377,6 +377,10 @@ impl<
     pub fn stochastic_recall(&self, optimization_parameters: OptimizationParameters) -> f32 {
         self.hnsw.stochastic_recall(optimization_parameters)
     }
+
+    pub fn build_parameters_for_improve_index(&self) -> BuildParameters {
+        self.hnsw.build_parameters
+    }
 }
 
 impl<
@@ -814,10 +818,11 @@ mod tests {
         let fc = AIComparator {
             data: Arc::new(RwLock::new(vecs.clone())),
         };
+        let bp = PqBuildParameters::default();
         let hnsw: QuantizedHnsw<1536, 32, 48, CentroidComparator32, QuantizedComparator32, _> =
-            QuantizedHnsw::new(100, fc);
+            QuantizedHnsw::new(100, fc, bp);
         let v = AbstractVector::Unstored(&vecs[0]);
-        let res = hnsw.search(v, 10, 2);
+        let res = hnsw.search(v, bp.hnsw.optimization.search);
         eprintln!("res: {res:?}");
         panic!();
     }
@@ -838,9 +843,10 @@ mod tests {
         let fc = Comparator16 {
             data: Arc::new(RwLock::new(vecs.clone())),
         };
+        let bp = PqBuildParameters::default();
         let mut hnsw: QuantizedHnsw<16, 4, 4, CentroidComparator4, QuantizedComparator4, _> =
-            QuantizedHnsw::new(100, fc);
-        hnsw.improve_neighbors(0.01, 1.0, None);
+            QuantizedHnsw::new(100, fc, bp);
+        hnsw.improve_neighbors(bp.hnsw.optimization, None);
 
         // Test last vector individually
         let raw_vec = vecs.last().unwrap();
@@ -853,14 +859,14 @@ mod tests {
         let internal_quantized = *hnsw.quantized_comparator().lookup(lvid);
         eprintln!("internal quant: {internal_quantized:?}");
         let av = AbstractVector::Unstored(raw_vec);
-        let res = hnsw.search(av, 10, 2);
+        let res = hnsw.search(av, bp.hnsw.optimization.search);
         eprintln!("Match results: {res:?}");
 
         let mut matches = 0;
         let mut match_sum = 0.0;
         for (i, v) in vecs.iter().enumerate() {
             let av = AbstractVector::Unstored(v);
-            let res = hnsw.search(av, 30, 2);
+            let res = hnsw.search(av, bp.hnsw.optimization.search);
             if let Some((matchvid, match_distance)) = res.first() {
                 if i == matchvid.0 {
                     matches += 1;

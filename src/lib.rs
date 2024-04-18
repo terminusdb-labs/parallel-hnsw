@@ -1967,8 +1967,11 @@ mod tests {
         ];
         let c = SillyComparator { data: data.clone() };
         let vs: Vec<_> = (0..9).map(VectorId).collect();
-
-        let hnsw: Hnsw<SillyComparator> = Hnsw::generate(c, vs, 3, 6, 6);
+        let mut bp = BuildParameters::default();
+        bp.order = 6;
+        bp.neighborhood_size = 3;
+        bp.zero_layer_neighborhood_size = 6;
+        let hnsw: Hnsw<SillyComparator> = Hnsw::generate(c, vs, bp);
         hnsw
     }
 
@@ -1988,8 +1991,12 @@ mod tests {
         ];
         let c = SillyComparator { data: data.clone() };
         let vs: Vec<_> = (0..9).map(VectorId).collect(); // only index 8 first..
+        let mut bp = BuildParameters::default();
+        bp.order = 6;
+        bp.neighborhood_size = 3;
+        bp.zero_layer_neighborhood_size = 6;
 
-        let mut hnsw: Hnsw<SillyComparator> = Hnsw::generate(c, vs, 3, 6, 6);
+        let mut hnsw: Hnsw<SillyComparator> = Hnsw::generate(c, vs, bp);
         let bottom = &mut hnsw.layers[1];
         // add a ninth disconnected vector
         bottom.nodes.push(VectorId(9));
@@ -2003,7 +2010,8 @@ mod tests {
         let sqrt2_recip = std::f32::consts::FRAC_1_SQRT_2;
         let slice = &[0.0, sqrt2_recip, sqrt2_recip];
         let search_vector = AbstractVector::Unstored(slice);
-        let results = hnsw.search(search_vector, 9, 1);
+
+        let results = hnsw.search(search_vector, hnsw.build_parameters.optimization.search);
         assert_eq!(
             results,
             vec![
@@ -2110,7 +2118,7 @@ mod tests {
         let data = &hnsw.layers[0].comparator.data;
         for (i, datum) in data.iter().enumerate() {
             let v = AbstractVector::Unstored(datum);
-            let results = hnsw.search(v, 9, 1);
+            let results = hnsw.search(v, hnsw.build_parameters.optimization.search);
             eprintln!("results: {results:?}");
             assert!(match_within_epsilon(VectorId(i), results));
         }
@@ -2127,7 +2135,7 @@ mod tests {
                 eprintln!("Searching for {i}");
                 */
                 let v = AbstractVector::Unstored(datum);
-                let results = hnsw.search(v, 300, 2);
+                let results = hnsw.search(v, hnsw.build_parameters.optimization.search);
                 if VectorId(i) == results[0].0 {
                     1
                 } else {
@@ -2160,9 +2168,9 @@ mod tests {
         let n1 = layer.discover_nodes_to_promote(supers_1);
         let n2 = layer.discover_nodes_to_promote(supers_1);
         assert_eq!(n1, n2);
-        let v1 = hnsw.discover_unreachable_vectors(0);
+        let v1 = hnsw.discover_unreachable_vectors(0, hnsw.build_parameters.optimization.search);
         eprintln!("{v1:?}");
-        let v2 = hnsw.discover_unreachable_vectors(0);
+        let v2 = hnsw.discover_unreachable_vectors(0, hnsw.build_parameters.optimization.search);
         assert_eq!(v1, v2);
         panic!();
     }
@@ -2171,12 +2179,14 @@ mod tests {
     fn test_recall() {
         let size = 10_000;
         let dimension = 1536;
-        let mut hnsw: Hnsw<BigComparator> = bigvec::make_random_hnsw(size, dimension);
+        let bp = BuildParameters::default();
+        let mut hnsw: Hnsw<BigComparator> =
+            bigvec::make_random_hnsw_with_build_parameters(size, dimension, bp);
         do_test_recall(&hnsw, 0.9);
         eprintln!("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
         eprintln!("Finished building, now improving");
         eprintln!("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
-        hnsw.improve_index(0.01, 0.001, 1.0, 1.0, None);
+        hnsw.improve_index(bp, None);
         do_test_recall(&hnsw, 1.0);
         panic!();
     }
@@ -2185,16 +2195,17 @@ mod tests {
     fn test_promotion() {
         let size = 1000;
         let dimension = 50;
+        let bp = BuildParameters::default();
         let mut hnsw: Hnsw<BigComparator> =
-            bigvec::make_random_hnsw_with_order(size, dimension, 10);
-        hnsw.improve_index(0.01, 0.01, 1.0, 1.0, None);
+            bigvec::make_random_hnsw_with_build_parameters(size, dimension, bp);
+        hnsw.improve_index(bp, None);
         do_test_recall(&hnsw, 0.0);
         let mut improvement_count = 0;
         let mut last_recall = 0.0;
         let mut last_improvement = 1.0;
         while last_improvement > 0.001 {
             eprintln!("{improvement_count} time to improve index");
-            hnsw.improve_index(0.01, 0.01, 1.0, 1.0, None);
+            hnsw.improve_index(bp, None);
             let new_recall = do_test_recall(&hnsw, 0.0);
             last_improvement = new_recall - last_recall;
             last_recall = new_recall;
@@ -2209,9 +2220,10 @@ mod tests {
     fn test_layer_generation() {
         let size = 100_000;
         let dimension = 1536;
+        let bp = BuildParameters::default();
         let mut hnsw: Hnsw<BigComparator> =
-            bigvec::make_random_hnsw_with_size(size, dimension, 24, 48, 24);
-        hnsw.improve_index(0.01, 0.01, 1.0, 1.0, None);
+            bigvec::make_random_hnsw_with_build_parameters(size, dimension, bp);
+        hnsw.improve_index(bp, None);
         do_test_recall(&hnsw, 0.0);
         panic!()
     }
@@ -2220,7 +2232,7 @@ mod tests {
     fn test_small_index_improvement() {
         let mut hnsw: Hnsw<SillyComparator> = make_simple_hnsw();
         eprintln!("One from bottom: {:?}", hnsw.layers[hnsw.layer_count() - 2]);
-        hnsw.improve_index(0.1, 0.1, 1.0, 1.0, None);
+        hnsw.improve_index(hnsw.build_parameters, None);
         eprintln!(
             "One from bottom after: {:?}",
             hnsw.layers[hnsw.layer_count() - 2]
@@ -2228,7 +2240,7 @@ mod tests {
         let data = &hnsw.layers[hnsw.layer_count() - 1].comparator.data;
         for (i, datum) in data.iter().enumerate() {
             let v = AbstractVector::Unstored(datum);
-            let results = hnsw.search(v, 9, 1);
+            let results = hnsw.search(v, hnsw.build_parameters.optimization.search);
             assert_eq!(VectorId(i), results[0].0)
         }
     }
@@ -2236,11 +2248,11 @@ mod tests {
     #[test]
     fn test_tiny_index_improvement() {
         let mut hnsw: Hnsw<SillyComparator> = make_broken_hnsw();
-        hnsw.improve_index(1.0, 0.1, 1.0, 1.0, None);
+        hnsw.improve_index(hnsw.build_parameters, None);
         let data = &hnsw.layers[hnsw.layer_count() - 1].comparator.data;
         for (i, datum) in data.iter().enumerate() {
             let v = AbstractVector::Unstored(datum);
-            let results = hnsw.search(v, 9, 1);
+            let results = hnsw.search(v, hnsw.build_parameters.optimization.search);
             eprintln!("{results:?}");
             assert_eq!(VectorId(i), results[0].0)
         }
@@ -2260,9 +2272,11 @@ mod tests {
         let mut best = 0.0_f32;
         let mut best_order = usize::MAX;
         let mut best_hnsw = None;
+        let mut bp = BuildParameters::default();
         for order in orders {
+            bp.order = order;
             let hnsw: Hnsw<BigComparator> =
-                bigvec::make_random_hnsw_with_order(size, dimension, order);
+                bigvec::make_random_hnsw_with_build_parameters(size, dimension, bp);
             let recall = do_test_recall(&hnsw, 0.0);
             if recall > best {
                 best = recall;
@@ -2277,7 +2291,7 @@ mod tests {
         let mut hnsw = best_hnsw.unwrap();
         while last_improvement > 0.001 {
             eprintln!("{improvement_count} time to improve index");
-            hnsw.improve_index(0.1, 0.1, 1.0, 1.0, None);
+            hnsw.improve_index(hnsw.build_parameters, None);
             let new_recall = do_test_recall(&hnsw, 0.0);
             last_improvement = new_recall - last_recall;
             last_recall = new_recall;
@@ -2327,7 +2341,7 @@ mod tests {
     fn test_threshold_nn() {
         let hnsw: Hnsw<SillyComparator> = make_simple_hnsw();
         let mut results: Vec<_> = hnsw
-            .threshold_nn(0.3, 1, hnsw.zero_layer_neighborhood_size)
+            .threshold_nn(0.3, 1, hnsw.build_parameters.zero_layer_neighborhood_size)
             .collect();
         results.sort_by_key(|(v, _d)| *v);
         assert_eq!(
@@ -2400,8 +2414,9 @@ mod tests {
         let vecs: Vec<Vec<f32>> = (0..size).map(move |_| random_vec(&mut prng, 32)).collect();
         let cc = Comparator32 { data: vecs.into() };
         let vids: Vec<VectorId> = (0..size).map(VectorId).collect();
-        let mut hnsw: Hnsw<Comparator32> = Hnsw::generate(cc, vids, 12, 24, 12);
-        hnsw.improve_index(0.001, 0.001, 1.0, 1.0, None);
+        let bp = BuildParameters::default();
+        let mut hnsw: Hnsw<Comparator32> = Hnsw::generate(cc, vids, bp);
+        hnsw.improve_index(bp, None);
         panic!()
     }
 
