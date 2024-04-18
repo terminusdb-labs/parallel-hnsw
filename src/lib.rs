@@ -1,10 +1,12 @@
 pub mod bigvec;
+pub mod parameters;
 pub mod pq;
 mod priority_queue;
 mod search;
 pub mod serialize;
 mod types;
 
+use parameters::{BuildParameters, OptimizationParameters, SearchParameters};
 pub use serialize::SerializationError;
 pub use types::*;
 
@@ -578,12 +580,10 @@ impl NodeDistance {
     };
 }
 
-#[derive(PartialEq, PartialOrd, Debug)]
+#[derive(Debug)]
 pub struct Hnsw<C> {
     pub layers: Vec<Layer<C>>,
-    order: usize,
-    neighborhood_size: usize,
-    zero_layer_neighborhood_size: usize,
+    pub build_parameters: BuildParameters,
 }
 
 impl<C> Hnsw<C> {
@@ -592,11 +592,11 @@ impl<C> Hnsw<C> {
     }
 
     pub fn neighborhood_size(&self) -> usize {
-        self.neighborhood_size
+        self.build_parameters.neighborhood_size
     }
 
     pub fn zero_neighborhood_size(&self) -> usize {
-        self.zero_layer_neighborhood_size
+        self.build_parameters.zero_layer_neighborhood_size
     }
 
     pub fn get_layer(&self, i: usize) -> Option<&Layer<C>> {
@@ -652,42 +652,22 @@ impl<C: Comparator + 'static> Hnsw<C> {
     pub fn search_upto(
         &self,
         v: AbstractVector<C::T>,
-        number_of_candidates: usize,
-        probe_depth: usize,
+        sp: SearchParameters,
         upto_layer_from_top: usize,
     ) -> Vec<(VectorId, f32)> {
-        search::search_layers(
-            v,
-            number_of_candidates,
-            &self.layers[..upto_layer_from_top],
-            probe_depth,
-            None,
-        )
-    }
-    pub fn search(
-        &self,
-        v: AbstractVector<C::T>,
-        number_of_candidates: usize,
-        probe_depth: usize,
-    ) -> Vec<(VectorId, f32)> {
-        search::search_layers(v, number_of_candidates, &self.layers, probe_depth, None)
+        search::search_layers(v, sp, &self.layers[..upto_layer_from_top], None)
     }
 
-    pub fn search_noisy(
+    pub fn search(&self, v: AbstractVector<C::T>, sp: SearchParameters) -> Vec<(VectorId, f32)> {
+        search::search_layers(v, sp, &self.layers, None)
+    }
+
+    pub fn search_instrumented(
         &self,
         v: AbstractVector<C::T>,
-        number_of_candidates: usize,
-        probe_depth: usize,
-        noisy: bool,
+        sp: SearchParameters,
     ) -> (Vec<(VectorId, f32)>, usize) {
-        search::search_layers_noisy(
-            v,
-            number_of_candidates,
-            &self.layers,
-            probe_depth,
-            noisy,
-            None,
-        )
+        search::search_layers_instrumented(v, sp, &self.layers, None)
     }
 
     pub fn generate_layer(
@@ -695,14 +675,13 @@ impl<C: Comparator + 'static> Hnsw<C> {
         comparator: C,
         mut vs: Vec<VectorId>,
         neighborhood_size: usize,
+        initial_partition_search: SearchParameters,
         new_top: bool,
     ) -> Layer<C> {
         assert!(!vs.is_empty(), "tried to construct an empty layer");
         // sort first, so that caller can send in unsorted
         vs.sort();
         // Parameter for the number of neighbours to look at from the proceeding layer.
-        let number_of_supers_to_check = 6; //neighborhood_size;
-
         eprintln!("Constructing neighorhood data structure");
         // This is the final neighbors array, we are going to slice it up here
         // and seed it with some prospects.
@@ -719,7 +698,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         let initial_partitions = search::generate_initial_partitions(
             &vs,
             &comparator,
-            number_of_supers_to_check,
+            initial_partition_search,
             layers,
             0,
         );
@@ -841,13 +820,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         }
     }
 
-    pub fn generate(
-        c: C,
-        mut vs: Vec<VectorId>,
-        neighborhood_size: usize,
-        zero_layer_neighborhood_size: usize,
-        order: usize,
-    ) -> Self {
+    pub fn generate(c: C, mut vs: Vec<VectorId>, bp: BuildParameters) -> Self {
         // start with a shuffle
         let mut rng = thread_rng();
         vs.shuffle(&mut rng);
@@ -858,15 +831,15 @@ impl<C: Comparator + 'static> Hnsw<C> {
         // eprintln!("neighborhood_size: {neighborhood_size}");
         // eprintln!("total_size: {total_size}");
         // eprintln!("layer count: {layer_count}");
-        let mut partitions = calculate_partitions(total_size, order);
+        let mut partitions = calculate_partitions(total_size, bp.order);
         eprintln!("generate with partitions: {partitions:?}");
         assert!(!partitions.is_empty());
         let layers = Vec::with_capacity(partitions.len());
+        let neighborhood_size = bp.neighborhood_size;
+        let zero_layer_neighborhood_size = bp.zero_layer_neighborhood_size;
         let mut hnsw: Hnsw<C> = Hnsw {
             layers,
-            neighborhood_size,
-            zero_layer_neighborhood_size,
-            order,
+            build_parameters: bp,
         };
         let mut i = 0;
         while i != partitions.len() {
@@ -881,11 +854,17 @@ impl<C: Comparator + 'static> Hnsw<C> {
             } else {
                 neighborhood_size
             };
-            let layer = hnsw.generate_layer(c.clone(), slice.to_vec(), neighbors, false);
+            let layer = hnsw.generate_layer(
+                c.clone(),
+                slice.to_vec(),
+                neighbors,
+                bp.initial_partition_search,
+                false,
+            );
             hnsw.layers.push(layer);
             eprintln!("linking to better neighbors (during construction)");
             let old_layer_count = hnsw.layer_count();
-            hnsw.improve_index(0.01, 0.01, 0.1, 0.01, None);
+            hnsw.improve_index(bp, None);
             let new_layer_count = hnsw.layer_count();
             let delta = new_layer_count - old_layer_count;
             if delta > 0 {
@@ -1011,7 +990,11 @@ impl<C: Comparator + 'static> Hnsw<C> {
         layer.reachables_from(node, check)
     }
 
-    pub fn discover_unreachable_vectors(&self, layer_id_from_top: usize) -> Vec<VectorId> {
+    pub fn discover_unreachable_vectors(
+        &self,
+        layer_id_from_top: usize,
+        search_parameters: SearchParameters,
+    ) -> Vec<VectorId> {
         //const THRESHOLD: usize = 42;
 
         let layers = &self.layers[0..=layer_id_from_top];
@@ -1026,12 +1009,10 @@ impl<C: Comparator + 'static> Hnsw<C> {
             .nodes
             .par_iter()
             .filter_map(|vector| {
-                let (matches, _index_distance) = search::search_layers_noisy(
+                let (matches, _index_distance) = search::search_layers_instrumented(
                     AbstractVector::Stored(*vector),
-                    300,
+                    search_parameters,
                     layers,
-                    2,
-                    false,
                     None,
                 );
                 let vector_is_in_matches = match_within_epsilon(*vector, matches);
@@ -1077,12 +1058,17 @@ impl<C: Comparator + 'static> Hnsw<C> {
         initialize_new_neighborhoods_into_layer(&new_nodes_map, layer);
     }
 
-    pub fn link_layer_to_better_neighbors(&mut self, layer_from_top: usize) -> usize {
+    pub fn link_layer_to_better_neighbors(
+        &mut self,
+        layer_from_top: usize,
+        sp: SearchParameters,
+    ) -> usize {
         self.link_nodes_in_layer_to_better_neighbors(
             layer_from_top,
             (0..self.get_layer_from_top(layer_from_top).unwrap().nodes.len())
                 .into_par_iter()
                 .map(NodeId),
+            sp,
         )
     }
 
@@ -1093,7 +1079,9 @@ impl<C: Comparator + 'static> Hnsw<C> {
         &mut self,
         layer_from_top: usize,
         nodes: II,
+        sp: SearchParameters,
     ) -> usize {
+        let neighborhood_size = self.neighborhood_size();
         let (top_stack, bottom_stack) = self.layers.split_at_mut(layer_from_top);
         let current_layer = &mut bottom_stack[0];
 
@@ -1114,12 +1102,11 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 let vector = pseudo_layer.get_vector(local_node);
                 let matches = search::search_layers(
                     AbstractVector::Stored(vector),
-                    self.neighborhood_size,
+                    sp,
                     &pseudo_stack,
-                    1,
                     Some(vector),
                 );
-                for (neighbor_vec, distance) in matches.into_iter().take(self.neighborhood_size) {
+                for (neighbor_vec, distance) in matches.into_iter().take(neighborhood_size) {
                     if neighbor_vec == vector {
                         break;
                     }
@@ -1157,9 +1144,13 @@ impl<C: Comparator + 'static> Hnsw<C> {
             .sum()
     }
 
-    fn improve_neighborhoods_at_layer(&mut self, layer_from_top: usize) -> usize {
+    fn improve_neighborhoods_at_layer(
+        &mut self,
+        layer_from_top: usize,
+        sp: SearchParameters,
+    ) -> usize {
         eprintln!("improving {layer_from_top}");
-        let count = self.link_layer_to_better_neighbors(layer_from_top);
+        let count = self.link_layer_to_better_neighbors(layer_from_top, sp);
         eprintln!("{layer_from_top}: relinked {count}");
         count
     }
@@ -1177,6 +1168,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         &self,
         layer_from_top: usize,
         vecs: Vec<VectorId>,
+        search_parameters: SearchParameters,
     ) -> Vec<(usize, Vec<VectorId>)> {
         let mut histomap: HashMap<usize, HashMap<NodeId, usize>> = HashMap::new();
         // - do histogramming
@@ -1247,8 +1239,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 let vec = layer.get_vector(node);
                 let result = self.search_upto(
                     AbstractVector::Stored(vec),
-                    layer.neighborhood_size,
-                    2,
+                    search_parameters,
                     layer_from_top,
                 );
                 let radius = result[0].1; // todo gotta tune this hypersphere
@@ -1264,9 +1255,10 @@ impl<C: Comparator + 'static> Hnsw<C> {
         result
     }
 
-    pub fn promote_at_layer(&mut self, layer_from_top: usize, max_proportion: f32) -> bool {
+    pub fn promote_at_layer(&mut self, layer_from_top: usize, bp: BuildParameters) -> bool {
+        let max_proportion = bp.optimization.promotion_proportion;
         eprintln!("promoting batch at layer from top: {layer_from_top}");
-        let mut vecs = self.discover_unreachable_vectors(layer_from_top);
+        let mut vecs = self.discover_unreachable_vectors(layer_from_top, bp.optimization.search);
         for i in 0..self.layer_count() {
             eprintln!("{}: Layer size is: {}", i, self.layers[i].node_count());
         }
@@ -1281,7 +1273,8 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 return false;
             }
         }
-        let order_vecs = self.filter_promotion_candidates(layer_from_top, vecs);
+        let order_vecs =
+            self.filter_promotion_candidates(layer_from_top, vecs, bp.optimization.search);
         for (layer_from_top, mut vecs) in order_vecs {
             eprintln!(
                 "vec len for promotion: {}@{} (out of {})",
@@ -1298,14 +1291,12 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 let old_nodes = layer.nodes.clone();
                 vecs.extend(old_nodes);
                 vecs.sort();
-                vecs.dedup(); // shouldn't do anything
-                let new_top = Self::generate(
-                    self.comparator().clone(),
-                    vecs,
-                    self.neighborhood_size,
-                    self.neighborhood_size,
-                    self.order,
-                );
+                // shouldn't do anything
+                vecs.dedup();
+                // Reuse parameters, but our zero layer is not a real zero.
+                let mut new_bp = bp;
+                new_bp.zero_layer_neighborhood_size = bp.neighborhood_size;
+                let new_top = Self::generate(self.comparator().clone(), vecs, new_bp);
                 let mut layers = new_top.layers;
                 eprintln!(
                     "generated {} new top layers (and nothing else)",
@@ -1327,7 +1318,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 eprintln!("sizes: {sizes:?}");
                 let mut new_sizes = calculate_partitions_from_bottom(
                     sizes.first().unwrap() + vecs.len(),
-                    self.order,
+                    self.build_parameters.order,
                 );
                 eprintln!("new sizes: {new_sizes:?}");
                 if new_sizes.len() < sizes.len() {
@@ -1364,13 +1355,12 @@ impl<C: Comparator + 'static> Hnsw<C> {
                     top_vecs.sort();
                     top_vecs.dedup();
 
-                    let new_top = Self::generate(
-                        self.comparator().clone(),
-                        top_vecs.clone(),
-                        self.neighborhood_size,
-                        self.neighborhood_size,
-                        self.order,
-                    );
+                    // Reuse build parameters but with a fake zero layer
+                    let mut new_bp = bp;
+                    new_bp.zero_layer_neighborhood_size = bp.neighborhood_size;
+
+                    let new_top =
+                        Self::generate(self.comparator().clone(), top_vecs.clone(), new_bp);
                     let layers = new_top.layers;
                     let new_top_len = layers.len();
                     eprintln!("generated {} new top layers (and extending)", layers.len());
@@ -1446,13 +1436,20 @@ impl<C: Comparator + 'static> Hnsw<C> {
         (vecs, layer_from_top)
     }
     */
-    pub fn stochastic_recall_at(&self, at: usize, recall_proportion: f32) -> f32 {
+    pub fn stochastic_recall_at(
+        &self,
+        at: usize,
+        optimization_parameters: OptimizationParameters,
+    ) -> f32 {
         let mut rng = StdRng::seed_from_u64(42);
         eprintln!("stochastic recall at: {at}");
         eprintln!("layer count: {}", self.layer_count());
         let layer = self.get_layer_from_top(at).unwrap();
         let total = layer.node_count();
-        let selection = usize::max(1, (total as f32 * recall_proportion) as usize);
+        let selection = usize::max(
+            1,
+            (total as f32 * optimization_parameters.recall_proportion) as usize,
+        );
         let vecs_to_find: Vec<VectorId> = if selection == total {
             layer.nodes.clone()
         } else {
@@ -1464,7 +1461,10 @@ impl<C: Comparator + 'static> Hnsw<C> {
         let relevant: usize = vecs_to_find
             .par_iter()
             .filter(|vid| {
-                let res = self.search(AbstractVector::Stored(**vid), 300, 2);
+                let res = self.search(
+                    AbstractVector::Stored(**vid),
+                    optimization_parameters.search,
+                );
                 res.iter().map(|(v, _)| v).any(|v| v == *vid)
             })
             .count();
@@ -1474,67 +1474,39 @@ impl<C: Comparator + 'static> Hnsw<C> {
         recall
     }
 
-    pub fn stochastic_recall(&self, recall_proportion: f32) -> f32 {
+    pub fn stochastic_recall(&self, optimization_parameters: OptimizationParameters) -> f32 {
         eprintln!("In stochastic recall");
         assert!(self.layer_count() != 0);
-        self.stochastic_recall_at(self.layer_count() - 1, recall_proportion)
-    }
-
-    pub fn recall(&self) -> f32 {
-        let total = self.len();
-        let total_relevant: usize = self
-            .par_all_vectors()
-            .map(|vector_id| {
-                let vector = self.comparator().lookup(vector_id);
-                let vector_data = &*vector;
-                /* eprintln!("XXXXXXXXXXXXXXXXXXXXXX");
-                eprintln!("Searching for {i}");
-                */
-                let v = AbstractVector::Unstored(vector_data);
-                let results = self.search(v, 300, 2);
-                if vector_id == results[0].0 {
-                    1
-                } else {
-                    0
-                }
-            })
-            .sum();
-
-        total_relevant as f32 / total as f32
+        self.stochastic_recall_at(self.layer_count() - 1, optimization_parameters)
     }
 
     pub fn improve_neighbors(
         &mut self,
-        threshold: f32,
-        recall_proportion: f32,
+        op: OptimizationParameters,
         last_recall: Option<f32>,
     ) -> f32 {
-        self.improve_neighbors_upto(
-            self.layer_count(),
-            threshold,
-            recall_proportion,
-            last_recall,
-        )
+        self.improve_neighbors_upto(self.layer_count(), op, last_recall)
     }
 
     pub fn improve_neighbors_upto(
         &mut self,
         upto: usize,
-        threshold: f32,
-        recall_proportion: f32,
+        op: OptimizationParameters,
         last_recall: Option<f32>,
     ) -> f32 {
         assert!(upto <= self.layer_count());
         assert!(upto >= 1);
+        let neighborhood_threshold = op.neighborhood_threshold;
+
         let mut last_recall = last_recall.unwrap_or(0.0);
         let mut last_improvement = 1.0_f32;
-        while last_improvement >= threshold && last_recall < 1.0 {
+        while last_improvement >= neighborhood_threshold && last_recall < 1.0 {
             for layer_id_from_top in 0..upto {
-                let count = self.improve_neighborhoods_at_layer(layer_id_from_top);
+                let count = self.improve_neighborhoods_at_layer(layer_id_from_top, op.search);
                 eprintln!("layer {layer_id_from_top}: improved {count}");
             }
 
-            let recall = self.stochastic_recall_at(upto - 1, recall_proportion);
+            let recall = self.stochastic_recall_at(upto - 1, op);
             last_improvement = recall - last_recall;
             last_recall = recall;
             eprintln!(
@@ -1550,15 +1522,15 @@ impl<C: Comparator + 'static> Hnsw<C> {
     pub fn improve_index_at(
         &mut self,
         mut layer_from_top: usize,
-        promotion_threshold: f32,
-        neighbor_threshold: f32,
-        recall_proportion: f32,
-        promotion_proportion: f32,
+        bp: BuildParameters,
         last_recall: Option<f32>,
     ) -> (f32, usize) {
+        let op = bp.optimization;
+        let promotion_threshold = op.promotion_threshold;
+
         // let's start with a neighborhood optimization so we don't overpromote
         let mut recall = last_recall
-            .unwrap_or_else(|| self.stochastic_recall_at(layer_from_top, recall_proportion));
+            .unwrap_or_else(|| self.stochastic_recall_at(layer_from_top, bp.optimization));
 
         let mut improvement = 1.0;
         let mut bailout = 1;
@@ -1570,15 +1542,10 @@ impl<C: Comparator + 'static> Hnsw<C> {
             while current_layer_from_top <= layer_from_top && bailout != 0 {
                 let layer_count = self.layer_count();
                 eprintln!("improve_index_at is going to call improve_neighbors_upto");
-                recall = self.improve_neighbors_upto(
-                    current_layer_from_top + 1,
-                    neighbor_threshold,
-                    recall_proportion,
-                    None,
-                );
+                recall = self.improve_neighbors_upto(current_layer_from_top + 1, op, None);
 
                 eprintln!("About to promote");
-                if self.promote_at_layer(current_layer_from_top, promotion_proportion) {
+                if self.promote_at_layer(current_layer_from_top, bp) {
                     let new_layer_count = self.layer_count();
                     eprintln!("New layer count: {new_layer_count}, old layer count: {layer_count}");
                     let layer_delta = new_layer_count - layer_count;
@@ -1588,12 +1555,8 @@ impl<C: Comparator + 'static> Hnsw<C> {
                     current_layer_from_top += layer_delta;
                     layer_from_top += layer_delta;
                     eprintln!("corrected current_layer_from_top is {current_layer_from_top}");
-                    recall = self.improve_neighbors_upto(
-                        current_layer_from_top + 1,
-                        neighbor_threshold,
-                        recall_proportion,
-                        Some(recall),
-                    );
+                    recall =
+                        self.improve_neighbors_upto(current_layer_from_top + 1, op, Some(recall));
                     eprintln!("recall after promotion: {recall}");
                 }
 
@@ -1664,16 +1627,9 @@ impl<C: Comparator + 'static> Hnsw<C> {
        }
     */
 
-    pub fn improve_index(
-        &mut self,
-        promotion_threshold: f32,
-        neighbor_threshold: f32,
-        recall_proportion: f32,
-        promotion_proportion: f32,
-        last_recall: Option<f32>,
-    ) -> f32 {
+    pub fn improve_index(&mut self, bp: BuildParameters, last_recall: Option<f32>) -> f32 {
         // let's start with a neighborhood optimization so we don't overpromote
-        let mut recall = last_recall.unwrap_or_else(|| self.stochastic_recall(recall_proportion));
+        let mut recall = last_recall.unwrap_or_else(|| self.stochastic_recall(bp.optimization));
 
         let mut layer_from_top = 0;
         while layer_from_top < self.layer_count() {
@@ -1681,14 +1637,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 "improve index, layer_from_top={layer_from_top}, layer_count: {}",
                 self.layer_count()
             );
-            (recall, layer_from_top) = self.improve_index_at(
-                layer_from_top,
-                promotion_threshold,
-                neighbor_threshold,
-                recall_proportion,
-                promotion_proportion,
-                None,
-            );
+            (recall, layer_from_top) = self.improve_index_at(layer_from_top, bp, None);
             eprintln!("afterwards, layer_from_top is {layer_from_top}");
             layer_from_top += 1;
         }
@@ -1699,13 +1648,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
 
 impl<C: Serializable + Clone> Hnsw<C> {
     pub fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
-        serialize::serialize_hnsw(
-            self.neighborhood_size,
-            self.zero_layer_neighborhood_size,
-            self.order,
-            &self.layers,
-            path,
-        )
+        serialize::serialize_hnsw(self.build_parameters, &self.layers, path)
     }
 
     pub fn deserialize<P: AsRef<Path>>(

@@ -1,6 +1,9 @@
-use std::path::PathBuf;
+use std::{fs::File, path::PathBuf};
 
-use crate::{AbstractVector, Comparator, Hnsw, OrderedFloat, Serializable, VectorId};
+use crate::{
+    parameters::{BuildParameters, OptimizationParameters, PqBuildParameters, SearchParameters},
+    AbstractVector, Comparator, Hnsw, OrderedFloat, Serializable, VectorId,
+};
 use chrono::Utc;
 use linfa::traits::Fit;
 use linfa::DatasetBase;
@@ -26,12 +29,17 @@ pub struct HnswQuantizer<
     C,
 > {
     hnsw: Hnsw<C>,
+    pq_build_parameters: PqBuildParameters,
 }
+
 impl<const SIZE: usize, const CENTROID_SIZE: usize, const QUANTIZED_SIZE: usize, C>
     HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
 {
-    pub fn new(hnsw: Hnsw<C>) -> Self {
-        Self { hnsw }
+    pub fn new(hnsw: Hnsw<C>, pq_build_parameters: PqBuildParameters) -> Self {
+        Self {
+            hnsw,
+            pq_build_parameters,
+        }
     }
 
     pub fn comparator(&self) -> &C {
@@ -47,10 +55,11 @@ impl<
     > Quantizer<SIZE, QUANTIZED_SIZE> for HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
 {
     fn quantize(&self, vec: &[f32; SIZE]) -> [u16; QUANTIZED_SIZE] {
+        let sp = self.pq_build_parameters.quantized_search;
         let mut result = [0; QUANTIZED_SIZE];
         for (ix, v) in vec.chunks(CENTROID_SIZE).enumerate() {
             let v: &[f32; CENTROID_SIZE] = unsafe { &*(v.as_ptr() as *const [f32; CENTROID_SIZE]) };
-            let distances = self.hnsw.search(AbstractVector::Unstored(v), 100, 2);
+            let distances = self.hnsw.search(AbstractVector::Unstored(v), sp);
             let quant = distances[0].0 .0 as u16; // TODO maybe debug assert
             result[ix] = quant;
         }
@@ -82,15 +91,25 @@ impl<
         &self,
         path: P,
     ) -> Result<(), crate::SerializationError> {
-        self.hnsw.serialize(path)
+        let parameter_path = path.as_ref().join("pq_build_parameters.json");
+        self.hnsw.serialize(path)?;
+        let writer = File::create(parameter_path)?;
+        serde_json::to_writer(writer, &self.pq_build_parameters)?;
+        Ok(())
     }
 
     fn deserialize<P: AsRef<std::path::Path>>(
         path: P,
         params: Self::Params,
     ) -> Result<Self, crate::SerializationError> {
+        let parameter_path = path.as_ref().join("pq_build_parameters.json");
         let hnsw = Hnsw::deserialize(path, params)?;
-        Ok(Self { hnsw })
+        let rdr = File::open(parameter_path)?;
+        let pq_build_parameters = serde_json::from_reader(rdr)?;
+        Ok(Self {
+            hnsw,
+            pq_build_parameters,
+        })
     }
 }
 
@@ -261,7 +280,11 @@ impl<
         centroid_candidates
     }
 
-    pub fn new(number_of_centroids: usize, comparator: FullComparator) -> Self {
+    pub fn new(
+        number_of_centroids: usize,
+        comparator: FullComparator,
+        bp: PqBuildParameters,
+    ) -> Self {
         //let centroids =
         //    Self::kmeans_centroids(number_of_centroids, 1 * number_of_centroids, &comparator);
         let centroids = Self::random_centroids(number_of_centroids, &comparator);
@@ -269,19 +292,10 @@ impl<
 
         let vector_ids = (0..centroids.len()).map(VectorId).collect();
         let centroid_comparator = CentroidComparator::new(centroids);
-        let centroid_m = 24;
-        let centroid_m0 = 48;
-        let centroid_order = 12;
         let mut quantized_comparator = QuantizedComparator::new(&centroid_comparator);
-        let mut centroid_hnsw: Hnsw<CentroidComparator> = Hnsw::generate(
-            centroid_comparator,
-            vector_ids,
-            centroid_m,
-            centroid_m0,
-            centroid_order,
-        );
-        centroid_hnsw.improve_index(0.001, 0.001, 1.0, 1.0, None);
-        //centroid_hnsw.improve_neighbors(0.01, 1.0);
+        let mut centroid_hnsw: Hnsw<CentroidComparator> =
+            Hnsw::generate(centroid_comparator, vector_ids, bp.centroids);
+        centroid_hnsw.improve_index(bp.centroids, None);
 
         let centroid_quantizer: HnswQuantizer<
             SIZE,
@@ -290,6 +304,7 @@ impl<
             CentroidComparator,
         > = HnswQuantizer {
             hnsw: centroid_hnsw,
+            pq_build_parameters: bp,
         };
         let mut vids: Vec<VectorId> = Vec::new();
         eprintln!("quantizing");
@@ -302,12 +317,8 @@ impl<
             vids.extend(quantized_comparator.store(Box::new(quantized.into_iter())));
         }
 
-        let m = 24;
-        let m0 = 48;
-        let order = 12;
         eprintln!("generating");
-        let hnsw: Hnsw<QuantizedComparator> =
-            Hnsw::generate(quantized_comparator, vids, m, m0, order);
+        let hnsw: Hnsw<QuantizedComparator> = Hnsw::generate(quantized_comparator, vids, bp.hnsw);
         Self {
             quantizer: centroid_quantizer,
             hnsw,
@@ -318,16 +329,11 @@ impl<
     pub fn search(
         &self,
         v: AbstractVector<[f32; SIZE]>,
-        number_of_candidates: usize,
-        probe_depth: usize,
+        sp: SearchParameters,
     ) -> Vec<(VectorId, f32)> {
         let raw_v = self.comparator.lookup_abstract(v.clone());
         let quantized = self.quantizer.quantize(&raw_v);
-        let result = self.hnsw.search(
-            AbstractVector::Unstored(&quantized),
-            number_of_candidates,
-            probe_depth,
-        );
+        let result = self.hnsw.search(AbstractVector::Unstored(&quantized), sp);
         let mut reordered = Vec::with_capacity(result.len());
         for (id, _) in result {
             let dist = self
@@ -340,33 +346,20 @@ impl<
         reordered
     }
 
-    pub fn improve_index(
-        &mut self,
-        promotion_threshold: f32,
-        neighbor_threshold: f32,
-        recall_proportion: f32,
-        promotion_proportion: f32,
-        last_recall: Option<f32>,
-    ) -> f32 {
-        self.hnsw.improve_index(
-            promotion_threshold,
-            neighbor_threshold,
-            recall_proportion,
-            promotion_proportion,
-            last_recall,
-        )
+    pub fn improve_index(&mut self, bp: BuildParameters, last_recall: Option<f32>) -> f32 {
+        self.hnsw.improve_index(bp, last_recall)
     }
+
     pub fn improve_neighbors(
         &mut self,
-        threshold: f32,
-        recall_proportion: f32,
+        op: OptimizationParameters,
         last_recall: Option<f32>,
     ) -> f32 {
-        self.hnsw
-            .improve_neighbors(threshold, recall_proportion, last_recall)
+        self.hnsw.improve_neighbors(op, last_recall)
     }
-    pub fn promote_at_layer(&mut self, layer_from_top: usize, max_proportion: f32) -> bool {
-        self.hnsw.promote_at_layer(layer_from_top, max_proportion)
+
+    pub fn promote_at_layer(&mut self, layer_from_top: usize, bp: BuildParameters) -> bool {
+        self.hnsw.promote_at_layer(layer_from_top, bp)
     }
 
     pub fn zero_neighborhood_size(&self) -> usize {
@@ -381,8 +374,8 @@ impl<
         self.hnsw
             .threshold_nn(threshold, probe_depth, initial_search_depth)
     }
-    pub fn stochastic_recall(&self, recall_proportion: f32) -> f32 {
-        self.hnsw.stochastic_recall(recall_proportion)
+    pub fn stochastic_recall(&self, optimization_parameters: OptimizationParameters) -> f32 {
+        self.hnsw.stochastic_recall(optimization_parameters)
     }
 }
 

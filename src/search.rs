@@ -1,6 +1,7 @@
 use rayon::prelude::*;
 
 use crate::{
+    parameters::SearchParameters,
     priority_queue::PriorityQueue,
     types::{AbstractVector, NodeId, OrderedFloat, VectorId},
     Comparator, Layer, NodeDistances,
@@ -31,7 +32,7 @@ pub fn compare_all<C: Comparator>(
 pub fn generate_initial_partitions<C: Comparator, L: AsRef<Layer<C>> + Sync>(
     vs: &[VectorId],
     comparator: &C,
-    number_of_supers_to_check: usize,
+    initial_vector_search: SearchParameters,
     layers: &[L],
     node_offset: usize,
 ) -> Vec<(NodeId, VectorId, NodeDistances)> {
@@ -47,7 +48,7 @@ pub fn generate_initial_partitions<C: Comparator, L: AsRef<Layer<C>> + Sync>(
                 compare_all(comparator, *vector_id, vs)
             } else {
                 //eprintln!("not empty layers");
-                initial_vector_distances(*vector_id, number_of_supers_to_check, layers)
+                initial_vector_distances(*vector_id, initial_vector_search, layers)
             };
             //eprintln!("ivd: {initial_vector_distances:?}");
             let initial_node_distances: Vec<_> = initial_vector_distances
@@ -71,10 +72,10 @@ pub fn generate_initial_partitions<C: Comparator, L: AsRef<Layer<C>> + Sync>(
 
 pub fn initial_vector_distances<C: Comparator, L: AsRef<Layer<C>>>(
     v: VectorId,
-    number_of_nodes: usize,
+    sp: SearchParameters,
     layers: &[L],
 ) -> Vec<(VectorId, f32)> {
-    search_layers(AbstractVector::Stored(v), number_of_nodes, layers, 1, None)
+    search_layers(AbstractVector::Stored(v), sp, layers, None)
         .into_iter()
         .filter(|(w, _)| v != *w)
         .collect::<Vec<_>>()
@@ -82,24 +83,21 @@ pub fn initial_vector_distances<C: Comparator, L: AsRef<Layer<C>>>(
 
 pub fn search_layers<C: Comparator, L: AsRef<Layer<C>>>(
     v: AbstractVector<C::T>,
-    number_of_candidates: usize,
+    sp: SearchParameters,
     layers: &[L],
-    probe_depth: usize,
     exclude: Option<VectorId>,
 ) -> Vec<(VectorId, f32)> {
-    search_layers_noisy(v, number_of_candidates, layers, probe_depth, false, exclude).0
+    search_layers_instrumented(v, sp, layers, exclude).0
 }
 
-pub fn search_layers_noisy<C: Comparator, L: AsRef<Layer<C>>>(
+pub fn search_layers_instrumented<C: Comparator, L: AsRef<Layer<C>>>(
     v: AbstractVector<C::T>,
-    number_of_candidates: usize,
+    sp: SearchParameters,
     layers: &[L],
-    probe_depth: usize,
-    noisy: bool,
     exclude: Option<VectorId>,
 ) -> (Vec<(VectorId, f32)>, usize) {
     //let upper_layer_candidate_count = 2;
-    let upper_layer_candidate_count = number_of_candidates;
+    let upper_layer_candidate_count = sp.upper_layer_candidate_count;
     let entry_vector = entry_vector(layers);
     let distance_from_entry = layers
         .first()
@@ -109,11 +107,7 @@ pub fn search_layers_noisy<C: Comparator, L: AsRef<Layer<C>>>(
                 .compare_vec(v.clone(), AbstractVector::Stored(entry_vector))
         })
         .unwrap_or(0.0);
-    if noisy {
-        eprintln!("layer len: {}", layers.len());
-        eprintln!("distance from entry: {distance_from_entry}");
-    }
-    let mut candidates = PriorityQueue::new(number_of_candidates);
+    let mut candidates = PriorityQueue::new(sp.number_of_candidates);
     candidates.insert(entry_vector, distance_from_entry);
     let mut last_index_distance = usize::MAX;
     for i in 0..layers.len() {
@@ -126,7 +120,7 @@ pub fn search_layers_noisy<C: Comparator, L: AsRef<Layer<C>>>(
                 distance
             });
         let candidate_count = if layers.len() == 1 || i == layers.len() - 1 {
-            number_of_candidates
+            sp.number_of_candidates
         } else {
             upper_layer_candidate_count
         };
@@ -135,13 +129,10 @@ pub fn search_layers_noisy<C: Comparator, L: AsRef<Layer<C>>>(
             v.clone(),
             &candidates,
             candidate_count,
-            probe_depth,
+            sp.probe_depth,
             |v| Some(v) != exclude,
         );
         last_index_distance = index_distance;
-        if noisy {
-            //eprintln!("closest: {closest:?}");
-        }
         candidates.merge_pairs(&closest);
     }
 
