@@ -1170,6 +1170,9 @@ impl<C: Comparator + 'static> Hnsw<C> {
         vecs: Vec<VectorId>,
         search_parameters: SearchParameters,
     ) -> Vec<(usize, Vec<VectorId>)> {
+        if layer_from_top == 0 {
+            return Vec::new();
+        }
         let mut histomap: HashMap<usize, HashMap<NodeId, usize>> = HashMap::new();
         // - do histogramming
         eprintln!("generate histogram");
@@ -1177,6 +1180,9 @@ impl<C: Comparator + 'static> Hnsw<C> {
         vecs.sort();
         for v in vecs.iter() {
             let order = self.discover_order_from_top(*v);
+            if order == 0 {
+                continue;
+            }
             let order_layer = self.get_layer_from_top(order).unwrap();
             let node = order_layer.get_node(*v).unwrap();
             let neighbors = order_layer.get_neighbors(node);
@@ -1543,6 +1549,11 @@ impl<C: Comparator + 'static> Hnsw<C> {
                 let layer_count = self.layer_count();
                 eprintln!("improve_index_at is going to call improve_neighbors_upto");
                 recall = self.improve_neighbors_upto(current_layer_from_top + 1, op, None);
+
+                if recall == 1.0 {
+                    current_layer_from_top += 1;
+                    continue;
+                }
 
                 eprintln!("About to promote");
                 if self.promote_at_layer(current_layer_from_top, bp) {

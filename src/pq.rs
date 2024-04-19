@@ -469,6 +469,14 @@ mod tests {
         )
     }
 
+    fn euclidean16(v1: &[f32; 16], v2: &[f32; 16]) -> f32 {
+        v1.iter()
+            .zip(v2.iter())
+            .map(|(f1, f2)| (f1 - f2).powi(2))
+            .sum::<f32>()
+            .powf(0.5)
+    }
+
     fn cosine1536(v1: &[f32; 1536], v2: &[f32; 1536]) -> f32 {
         normalize_cosine_distance(
             v1.iter()
@@ -501,23 +509,23 @@ mod tests {
     }
 
     #[derive(Clone)]
-    struct CentroidComparator32 {
-        data: Arc<Vec<[f32; 32]>>,
+    struct CentroidComparator16 {
+        data: Arc<Vec<[f32; 16]>>,
     }
 
-    impl Comparator for CentroidComparator32 {
-        type T = [f32; 32];
+    impl Comparator for CentroidComparator16 {
+        type T = [f32; 16];
         type Borrowable<'a> = &'a Self::T;
         fn lookup(&self, v: crate::VectorId) -> Self::Borrowable<'_> {
             &self.data[v.0]
         }
 
         fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
-            cosine32(v1, v2)
+            euclidean16(v1, v2)
         }
     }
 
-    impl CentroidComparatorConstructor for CentroidComparator32 {
+    impl CentroidComparatorConstructor for CentroidComparator16 {
         fn new(centroids: Vec<Self::T>) -> Self {
             Self {
                 data: Arc::new(centroids),
@@ -526,19 +534,19 @@ mod tests {
     }
 
     #[derive(Clone)]
-    struct QuantizedComparator32 {
-        cc: CentroidComparator32,
-        data: Arc<RwLock<Vec<[u16; 48]>>>,
+    struct QuantizedComparator16 {
+        cc: CentroidComparator16,
+        data: Arc<RwLock<Vec<[u16; 96]>>>,
     }
 
-    impl PartialDistance for QuantizedComparator32 {
+    impl PartialDistance for QuantizedComparator16 {
         fn partial_distance(&self, _i: u16, _j: u16) -> f32 {
             todo!()
         }
     }
 
-    impl Comparator for QuantizedComparator32 {
-        type T = [u16; 48];
+    impl Comparator for QuantizedComparator16 {
+        type T = [u16; 96];
         type Borrowable<'a> = ReadLockedVec<'a, Self::T>;
         fn lookup(&self, v: crate::VectorId) -> Self::Borrowable<'_> {
             ReadLockedVec {
@@ -564,8 +572,8 @@ mod tests {
         }
     }
 
-    impl QuantizedComparatorConstructor for QuantizedComparator32 {
-        type CentroidComparator = CentroidComparator32;
+    impl QuantizedComparatorConstructor for QuantizedComparator16 {
+        type CentroidComparator = CentroidComparator16;
 
         fn new(cc: &Self::CentroidComparator) -> Self {
             Self {
@@ -575,8 +583,8 @@ mod tests {
         }
     }
 
-    impl VectorStore for QuantizedComparator32 {
-        type T = <QuantizedComparator32 as Comparator>::T;
+    impl VectorStore for QuantizedComparator16 {
+        type T = <QuantizedComparator16 as Comparator>::T;
 
         fn store(&mut self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
             let mut data = self.data.write().unwrap();
@@ -819,7 +827,7 @@ mod tests {
             data: Arc::new(RwLock::new(vecs.clone())),
         };
         let bp = PqBuildParameters::default();
-        let hnsw: QuantizedHnsw<1536, 32, 48, CentroidComparator32, QuantizedComparator32, _> =
+        let hnsw: QuantizedHnsw<1536, 16, 96, CentroidComparator16, QuantizedComparator16, _> =
             QuantizedHnsw::new(100, fc, bp);
         let v = AbstractVector::Unstored(&vecs[0]);
         let res = hnsw.search(v, bp.hnsw.optimization.search);
@@ -881,5 +889,63 @@ mod tests {
         let match_avg = match_sum / vecs.len() as f32;
         eprintln!("average match distance: {match_avg}");
         panic!();
+    }
+    #[test]
+    fn centroid_hnsw() {
+        let count = 100_000;
+        let vecs: Vec<[f32; 1536]> = (0..count)
+            .into_par_iter()
+            .map(move |i| {
+                let mut prng = StdRng::seed_from_u64(42_u64 + i as u64);
+                let mut arr = [0.0_f32; 1536];
+                let v = random_normed_vec(&mut prng, 1536);
+                arr.copy_from_slice(&v);
+                arr
+            })
+            .collect();
+        let number_of_centroids = 65535;
+        let fc = AIComparator {
+            data: Arc::new(RwLock::new(vecs)),
+        };
+        let centroids = QuantizedHnsw::<
+            1536,
+            16,
+            96,
+            CentroidComparator16,
+            QuantizedComparator16,
+            AIComparator,
+        >::random_centroids(number_of_centroids, &fc);
+        eprintln!("Number of centroids: {}", centroids.len());
+        let vector_ids = (0..centroids.len()).map(VectorId).collect();
+        let centroid_comparator = CentroidComparator16::new(centroids);
+        //let quantized_comparator = QuantizedComparator16::new(&centroid_comparator);
+        let bp = PqBuildParameters::default();
+        let mut centroid_hnsw: Hnsw<CentroidComparator16> =
+            Hnsw::generate(centroid_comparator, vector_ids, bp.centroids);
+        let recall = centroid_hnsw.improve_index(bp.centroids, None);
+        assert!(recall > 0.99);
+    }
+
+    #[test]
+    fn test_pq_recall() {
+        let count = 100_000;
+        let vecs: Vec<[f32; 1536]> = (0..count)
+            .into_par_iter()
+            .map(move |i| {
+                let mut prng = StdRng::seed_from_u64(42_u64 + i as u64);
+                let mut arr = [0.0_f32; 1536];
+                let v = random_normed_vec(&mut prng, 1536);
+                arr.copy_from_slice(&v);
+                arr
+            })
+            .collect();
+        let centroids = 65535;
+        let fc = AIComparator {
+            data: Arc::new(RwLock::new(vecs)),
+        };
+        let bp = PqBuildParameters::default();
+        let mut hnsw: QuantizedHnsw<1536, 16, 96, CentroidComparator16, QuantizedComparator16, _> =
+            QuantizedHnsw::new(centroids, fc, bp);
+        hnsw.improve_neighbors(bp.hnsw.optimization, None);
     }
 }
