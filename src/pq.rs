@@ -7,11 +7,12 @@ use linfa_clustering::KMeans;
 use ndarray::{Array, Array2};
 use rand::prelude::*;
 use rayon::prelude::*;
+use serde_json::json;
 
 use crate::{
     keepalive,
     parameters::{BuildParameters, OptimizationParameters, PqBuildParameters, SearchParameters},
-    progress::ProgressMonitor,
+    progress::{ProgressMonitor, ProgressUpdate},
     AbstractVector, Comparator, Hnsw, OrderedFloat, Serializable, VectorId,
 };
 
@@ -291,6 +292,12 @@ impl<
     ) -> Self {
         //let centroids =
         //    Self::kmeans_centroids(number_of_centroids, 1 * number_of_centroids, &comparator);
+        progress
+            .update(ProgressUpdate {
+                state: json!({"type":"pq"}),
+            })
+            .unwrap();
+
         let centroids = keepalive!(
             progress,
             Self::random_centroids(number_of_centroids, &comparator)
