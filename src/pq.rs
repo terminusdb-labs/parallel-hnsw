@@ -298,7 +298,7 @@ impl<
         eprintln!("Number of centroids: {}", centroids.len());
 
         let vector_ids = (0..centroids.len()).map(VectorId).collect();
-        let centroid_comparator = CentroidComparator::new(centroids);
+        let centroid_comparator = keepalive!(progress, CentroidComparator::new(centroids));
         let mut quantized_comparator = QuantizedComparator::new(&centroid_comparator);
         let mut centroid_hnsw: Hnsw<CentroidComparator> =
             Hnsw::generate(centroid_comparator, vector_ids, bp.centroids, progress);
