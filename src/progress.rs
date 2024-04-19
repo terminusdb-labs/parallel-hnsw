@@ -2,7 +2,9 @@ use std::any::Any;
 
 use thiserror::Error;
 
-pub struct ProgressUpdate {}
+pub struct ProgressUpdate {
+    pub state: serde_json::Value,
+}
 #[derive(Debug, Error)]
 #[error("interrupted")]
 pub struct Interrupt;
