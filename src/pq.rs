@@ -946,6 +946,7 @@ mod tests {
         let bp = PqBuildParameters::default();
         let mut hnsw: QuantizedHnsw<1536, 16, 96, CentroidComparator16, QuantizedComparator16, _> =
             QuantizedHnsw::new(centroids, fc, bp);
-        hnsw.improve_neighbors(bp.hnsw.optimization, None);
+        let recall = hnsw.improve_neighbors(bp.hnsw.optimization, None);
+        assert_eq!(recall, 1.0)
     }
 }
