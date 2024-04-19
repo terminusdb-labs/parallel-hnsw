@@ -1,9 +1,5 @@
-use std::path::PathBuf;
+use std::{fs::File, path::PathBuf};
 
-use crate::{
-    progress::ProgressMonitor, AbstractVector, Comparator, Hnsw, OrderedFloat, Serializable,
-    VectorId,
-};
 use chrono::Utc;
 use linfa::traits::Fit;
 use linfa::DatasetBase;
@@ -11,6 +7,12 @@ use linfa_clustering::KMeans;
 use ndarray::{Array, Array2};
 use rand::prelude::*;
 use rayon::prelude::*;
+
+use crate::{
+    parameters::{BuildParameters, OptimizationParameters, PqBuildParameters, SearchParameters},
+    progress::ProgressMonitor,
+    AbstractVector, Comparator, Hnsw, OrderedFloat, Serializable, VectorId,
+};
 
 pub trait Quantizer<const SIZE: usize, const QUANTIZED_SIZE: usize> {
     fn quantize(&self, vec: &[f32; SIZE]) -> [u16; QUANTIZED_SIZE];
@@ -29,12 +31,17 @@ pub struct HnswQuantizer<
     C,
 > {
     hnsw: Hnsw<C>,
+    pq_build_parameters: PqBuildParameters,
 }
+
 impl<const SIZE: usize, const CENTROID_SIZE: usize, const QUANTIZED_SIZE: usize, C>
     HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
 {
-    pub fn new(hnsw: Hnsw<C>) -> Self {
-        Self { hnsw }
+    pub fn new(hnsw: Hnsw<C>, pq_build_parameters: PqBuildParameters) -> Self {
+        Self {
+            hnsw,
+            pq_build_parameters,
+        }
     }
 
     pub fn comparator(&self) -> &C {
@@ -50,10 +57,11 @@ impl<
     > Quantizer<SIZE, QUANTIZED_SIZE> for HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
 {
     fn quantize(&self, vec: &[f32; SIZE]) -> [u16; QUANTIZED_SIZE] {
+        let sp = self.pq_build_parameters.quantized_search;
         let mut result = [0; QUANTIZED_SIZE];
         for (ix, v) in vec.chunks(CENTROID_SIZE).enumerate() {
             let v: &[f32; CENTROID_SIZE] = unsafe { &*(v.as_ptr() as *const [f32; CENTROID_SIZE]) };
-            let distances = self.hnsw.search(AbstractVector::Unstored(v), 100, 2);
+            let distances = self.hnsw.search(AbstractVector::Unstored(v), sp);
             let quant = distances[0].0 .0 as u16; // TODO maybe debug assert
             result[ix] = quant;
         }
@@ -85,15 +93,25 @@ impl<
         &self,
         path: P,
     ) -> Result<(), crate::SerializationError> {
-        self.hnsw.serialize(path)
+        let parameter_path = path.as_ref().join("pq_build_parameters.json");
+        self.hnsw.serialize(path)?;
+        let writer = File::create(parameter_path)?;
+        serde_json::to_writer(writer, &self.pq_build_parameters)?;
+        Ok(())
     }
 
     fn deserialize<P: AsRef<std::path::Path>>(
         path: P,
         params: Self::Params,
     ) -> Result<Self, crate::SerializationError> {
+        let parameter_path = path.as_ref().join("pq_build_parameters.json");
         let hnsw = Hnsw::deserialize(path, params)?;
-        Ok(Self { hnsw })
+        let rdr = File::open(parameter_path)?;
+        let pq_build_parameters = serde_json::from_reader(rdr)?;
+        Ok(Self {
+            hnsw,
+            pq_build_parameters,
+        })
     }
 }
 
@@ -267,6 +285,7 @@ impl<
     pub fn new(
         number_of_centroids: usize,
         comparator: FullComparator,
+        bp: PqBuildParameters,
         progress: &mut dyn ProgressMonitor,
     ) -> Self {
         //let centroids =
@@ -276,20 +295,10 @@ impl<
 
         let vector_ids = (0..centroids.len()).map(VectorId).collect();
         let centroid_comparator = CentroidComparator::new(centroids);
-        let centroid_m = 24;
-        let centroid_m0 = 48;
-        let centroid_order = 48;
         let mut quantized_comparator = QuantizedComparator::new(&centroid_comparator);
-        let mut centroid_hnsw: Hnsw<CentroidComparator> = Hnsw::generate(
-            centroid_comparator,
-            vector_ids,
-            centroid_m,
-            centroid_m0,
-            centroid_order,
-            progress,
-        );
-        centroid_hnsw.improve_index(0.001, 0.001, 1.0, 0.1, None, progress);
-        //centroid_hnsw.improve_neighbors(0.01, 1.0);
+        let mut centroid_hnsw: Hnsw<CentroidComparator> =
+            Hnsw::generate(centroid_comparator, vector_ids, bp.centroids, progress);
+        centroid_hnsw.improve_index(bp.centroids, None, progress);
 
         let centroid_quantizer: HnswQuantizer<
             SIZE,
@@ -298,6 +307,7 @@ impl<
             CentroidComparator,
         > = HnswQuantizer {
             hnsw: centroid_hnsw,
+            pq_build_parameters: bp,
         };
         let mut vids: Vec<VectorId> = Vec::new();
         eprintln!("quantizing");
@@ -313,12 +323,9 @@ impl<
             }
         }
 
-        let m = 24;
-        let m0 = 48;
-        let order = 48;
         eprintln!("generating");
         let hnsw: Hnsw<QuantizedComparator> =
-            Hnsw::generate(quantized_comparator, vids, m, m0, order, progress);
+            Hnsw::generate(quantized_comparator, vids, bp.hnsw, progress);
         Self {
             quantizer: centroid_quantizer,
             hnsw,
@@ -329,16 +336,11 @@ impl<
     pub fn search(
         &self,
         v: AbstractVector<[f32; SIZE]>,
-        number_of_candidates: usize,
-        probe_depth: usize,
+        sp: SearchParameters,
     ) -> Vec<(VectorId, f32)> {
         let raw_v = self.comparator.lookup_abstract(v.clone());
         let quantized = self.quantizer.quantize(&raw_v);
-        let result = self.hnsw.search(
-            AbstractVector::Unstored(&quantized),
-            number_of_candidates,
-            probe_depth,
-        );
+        let result = self.hnsw.search(AbstractVector::Unstored(&quantized), sp);
         let mut reordered = Vec::with_capacity(result.len());
         for (id, _) in result {
             let dist = self
@@ -353,33 +355,28 @@ impl<
 
     pub fn improve_index(
         &mut self,
-        promotion_threshold: f32,
-        neighbor_threshold: f32,
-        recall_proportion: f32,
-        promotion_proportion: f32,
+        bp: BuildParameters,
         last_recall: Option<f32>,
         progress: &mut dyn ProgressMonitor,
     ) -> f32 {
-        self.hnsw.improve_index(
-            promotion_threshold,
-            neighbor_threshold,
-            recall_proportion,
-            promotion_proportion,
-            last_recall,
-            progress,
-        )
+        self.hnsw.improve_index(bp, last_recall, progress)
     }
+
     pub fn improve_neighbors(
         &mut self,
-        threshold: f32,
-        recall_proportion: f32,
+        op: OptimizationParameters,
         last_recall: Option<f32>,
     ) -> f32 {
-        self.hnsw
-            .improve_neighbors(threshold, recall_proportion, last_recall)
+        self.hnsw.improve_neighbors(op, last_recall)
     }
-    pub fn promote_at_layer(&mut self, layer_from_top: usize, max_proportion: f32) -> bool {
-        self.hnsw.promote_at_layer(layer_from_top, max_proportion)
+
+    pub fn promote_at_layer(
+        &mut self,
+        layer_from_top: usize,
+        bp: BuildParameters,
+        progress: &mut dyn ProgressMonitor,
+    ) -> bool {
+        self.hnsw.promote_at_layer(layer_from_top, bp, progress)
     }
 
     pub fn zero_neighborhood_size(&self) -> usize {
@@ -394,8 +391,12 @@ impl<
         self.hnsw
             .threshold_nn(threshold, probe_depth, initial_search_depth)
     }
-    pub fn stochastic_recall(&self, recall_proportion: f32) -> f32 {
-        self.hnsw.stochastic_recall(recall_proportion)
+    pub fn stochastic_recall(&self, optimization_parameters: OptimizationParameters) -> f32 {
+        self.hnsw.stochastic_recall(optimization_parameters)
+    }
+
+    pub fn build_parameters_for_improve_index(&self) -> BuildParameters {
+        self.hnsw.build_parameters
     }
 }
 
@@ -485,6 +486,14 @@ mod tests {
         )
     }
 
+    fn euclidean16(v1: &[f32; 16], v2: &[f32; 16]) -> f32 {
+        v1.iter()
+            .zip(v2.iter())
+            .map(|(f1, f2)| (f1 - f2).powi(2))
+            .sum::<f32>()
+            .powf(0.5)
+    }
+
     fn cosine1536(v1: &[f32; 1536], v2: &[f32; 1536]) -> f32 {
         normalize_cosine_distance(
             v1.iter()
@@ -517,23 +526,23 @@ mod tests {
     }
 
     #[derive(Clone)]
-    struct CentroidComparator32 {
-        data: Arc<Vec<[f32; 32]>>,
+    struct CentroidComparator16 {
+        data: Arc<Vec<[f32; 16]>>,
     }
 
-    impl Comparator for CentroidComparator32 {
-        type T = [f32; 32];
+    impl Comparator for CentroidComparator16 {
+        type T = [f32; 16];
         type Borrowable<'a> = &'a Self::T;
         fn lookup(&self, v: crate::VectorId) -> Self::Borrowable<'_> {
             &self.data[v.0]
         }
 
         fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
-            cosine32(v1, v2)
+            euclidean16(v1, v2)
         }
     }
 
-    impl CentroidComparatorConstructor for CentroidComparator32 {
+    impl CentroidComparatorConstructor for CentroidComparator16 {
         fn new(centroids: Vec<Self::T>) -> Self {
             Self {
                 data: Arc::new(centroids),
@@ -542,19 +551,19 @@ mod tests {
     }
 
     #[derive(Clone)]
-    struct QuantizedComparator32 {
-        cc: CentroidComparator32,
-        data: Arc<RwLock<Vec<[u16; 48]>>>,
+    struct QuantizedComparator16 {
+        cc: CentroidComparator16,
+        data: Arc<RwLock<Vec<[u16; 96]>>>,
     }
 
-    impl PartialDistance for QuantizedComparator32 {
+    impl PartialDistance for QuantizedComparator16 {
         fn partial_distance(&self, _i: u16, _j: u16) -> f32 {
             todo!()
         }
     }
 
-    impl Comparator for QuantizedComparator32 {
-        type T = [u16; 48];
+    impl Comparator for QuantizedComparator16 {
+        type T = [u16; 96];
         type Borrowable<'a> = ReadLockedVec<'a, Self::T>;
         fn lookup(&self, v: crate::VectorId) -> Self::Borrowable<'_> {
             ReadLockedVec {
@@ -580,8 +589,8 @@ mod tests {
         }
     }
 
-    impl QuantizedComparatorConstructor for QuantizedComparator32 {
-        type CentroidComparator = CentroidComparator32;
+    impl QuantizedComparatorConstructor for QuantizedComparator16 {
+        type CentroidComparator = CentroidComparator16;
 
         fn new(cc: &Self::CentroidComparator) -> Self {
             Self {
@@ -591,8 +600,8 @@ mod tests {
         }
     }
 
-    impl VectorStore for QuantizedComparator32 {
-        type T = <QuantizedComparator32 as Comparator>::T;
+    impl VectorStore for QuantizedComparator16 {
+        type T = <QuantizedComparator16 as Comparator>::T;
 
         fn store(&mut self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
             let mut data = self.data.write().unwrap();
@@ -834,10 +843,11 @@ mod tests {
         let fc = AIComparator {
             data: Arc::new(RwLock::new(vecs.clone())),
         };
-        let hnsw: QuantizedHnsw<1536, 32, 48, CentroidComparator32, QuantizedComparator32, _> =
-            QuantizedHnsw::new(100, fc);
+        let bp = PqBuildParameters::default();
+        let hnsw: QuantizedHnsw<1536, 16, 96, CentroidComparator16, QuantizedComparator16, _> =
+            QuantizedHnsw::new(100, fc, bp);
         let v = AbstractVector::Unstored(&vecs[0]);
-        let res = hnsw.search(v, 10, 2);
+        let res = hnsw.search(v, bp.hnsw.optimization.search);
         eprintln!("res: {res:?}");
         panic!();
     }
@@ -858,9 +868,10 @@ mod tests {
         let fc = Comparator16 {
             data: Arc::new(RwLock::new(vecs.clone())),
         };
+        let bp = PqBuildParameters::default();
         let mut hnsw: QuantizedHnsw<16, 4, 4, CentroidComparator4, QuantizedComparator4, _> =
-            QuantizedHnsw::new(100, fc);
-        hnsw.improve_neighbors(0.01, 1.0, None);
+            QuantizedHnsw::new(100, fc, bp);
+        hnsw.improve_neighbors(bp.hnsw.optimization, None);
 
         // Test last vector individually
         let raw_vec = vecs.last().unwrap();
@@ -873,14 +884,14 @@ mod tests {
         let internal_quantized = *hnsw.quantized_comparator().lookup(lvid);
         eprintln!("internal quant: {internal_quantized:?}");
         let av = AbstractVector::Unstored(raw_vec);
-        let res = hnsw.search(av, 10, 2);
+        let res = hnsw.search(av, bp.hnsw.optimization.search);
         eprintln!("Match results: {res:?}");
 
         let mut matches = 0;
         let mut match_sum = 0.0;
         for (i, v) in vecs.iter().enumerate() {
             let av = AbstractVector::Unstored(v);
-            let res = hnsw.search(av, 30, 2);
+            let res = hnsw.search(av, bp.hnsw.optimization.search);
             if let Some((matchvid, match_distance)) = res.first() {
                 if i == matchvid.0 {
                     matches += 1;
@@ -895,5 +906,64 @@ mod tests {
         let match_avg = match_sum / vecs.len() as f32;
         eprintln!("average match distance: {match_avg}");
         panic!();
+    }
+    #[test]
+    fn centroid_hnsw() {
+        let count = 100_000;
+        let vecs: Vec<[f32; 1536]> = (0..count)
+            .into_par_iter()
+            .map(move |i| {
+                let mut prng = StdRng::seed_from_u64(42_u64 + i as u64);
+                let mut arr = [0.0_f32; 1536];
+                let v = random_normed_vec(&mut prng, 1536);
+                arr.copy_from_slice(&v);
+                arr
+            })
+            .collect();
+        let number_of_centroids = 65535;
+        let fc = AIComparator {
+            data: Arc::new(RwLock::new(vecs)),
+        };
+        let centroids = QuantizedHnsw::<
+            1536,
+            16,
+            96,
+            CentroidComparator16,
+            QuantizedComparator16,
+            AIComparator,
+        >::random_centroids(number_of_centroids, &fc);
+        eprintln!("Number of centroids: {}", centroids.len());
+        let vector_ids = (0..centroids.len()).map(VectorId).collect();
+        let centroid_comparator = CentroidComparator16::new(centroids);
+        //let quantized_comparator = QuantizedComparator16::new(&centroid_comparator);
+        let bp = PqBuildParameters::default();
+        let mut centroid_hnsw: Hnsw<CentroidComparator16> =
+            Hnsw::generate(centroid_comparator, vector_ids, bp.centroids);
+        let recall = centroid_hnsw.improve_index(bp.centroids, None);
+        assert!(recall > 0.99);
+    }
+
+    #[test]
+    fn test_pq_recall() {
+        let count = 100_000;
+        let vecs: Vec<[f32; 1536]> = (0..count)
+            .into_par_iter()
+            .map(move |i| {
+                let mut prng = StdRng::seed_from_u64(42_u64 + i as u64);
+                let mut arr = [0.0_f32; 1536];
+                let v = random_normed_vec(&mut prng, 1536);
+                arr.copy_from_slice(&v);
+                arr
+            })
+            .collect();
+        let centroids = 65535;
+        let fc = AIComparator {
+            data: Arc::new(RwLock::new(vecs)),
+        };
+        let bp = PqBuildParameters::default();
+        let mut hnsw: QuantizedHnsw<1536, 16, 96, CentroidComparator16, QuantizedComparator16, _> =
+            QuantizedHnsw::new(centroids, fc, bp);
+        let recall = hnsw.improve_neighbors(bp.hnsw.optimization, None);
+        assert_eq!(recall, 1.0)
     }
 }

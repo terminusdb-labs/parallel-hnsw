@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::{mem, slice};
 use thiserror::Error;
 
+use crate::parameters::BuildParameters;
 use crate::{Hnsw, Layer, NodeId, Serializable, VectorId};
 
 #[derive(Error, Debug)]
@@ -26,15 +27,11 @@ pub struct LayerMeta {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct HNSWMeta {
     pub layer_count: usize,
-    pub neighborhood_size: usize,
-    pub zero_layer_neighborhood_size: usize,
-    pub order: usize,
+    pub build_parameters: BuildParameters,
 }
 
 pub fn serialize_hnsw<C: Serializable, P: AsRef<Path>>(
-    neighborhood_size: usize,
-    zero_layer_neighborhood_size: usize,
-    order: usize,
+    build_parameters: BuildParameters,
     layers: &[Layer<C>],
     path: P,
 ) -> Result<(), SerializationError> {
@@ -53,9 +50,7 @@ pub fn serialize_hnsw<C: Serializable, P: AsRef<Path>>(
 
     let serialized = serde_json::to_string(&HNSWMeta {
         layer_count,
-        neighborhood_size,
-        zero_layer_neighborhood_size,
-        order,
+        build_parameters,
     })?;
     eprintln!("serialized data");
     hnsw_meta_file.write_all(serialized.as_bytes())?;
@@ -139,9 +134,7 @@ pub fn deserialize_hnsw<C: Serializable + Clone, P: AsRef<Path>>(
     hnsw_meta_file.read_to_string(&mut contents)?;
     let HNSWMeta {
         layer_count,
-        neighborhood_size,
-        zero_layer_neighborhood_size,
-        order,
+        build_parameters,
     }: HNSWMeta = serde_json::from_str(&contents)?;
 
     let mut hnsw_comparator_path: PathBuf = dbg!(path.as_ref().into());
@@ -211,8 +204,6 @@ pub fn deserialize_hnsw<C: Serializable + Clone, P: AsRef<Path>>(
     }
     Ok(Hnsw {
         layers,
-        neighborhood_size,
-        zero_layer_neighborhood_size,
-        order,
+        build_parameters,
     })
 }
