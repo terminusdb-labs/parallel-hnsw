@@ -9,6 +9,7 @@ use rand::prelude::*;
 use rayon::prelude::*;
 
 use crate::{
+    keepalive,
     parameters::{BuildParameters, OptimizationParameters, PqBuildParameters, SearchParameters},
     progress::ProgressMonitor,
     AbstractVector, Comparator, Hnsw, OrderedFloat, Serializable, VectorId,
@@ -290,7 +291,10 @@ impl<
     ) -> Self {
         //let centroids =
         //    Self::kmeans_centroids(number_of_centroids, 1 * number_of_centroids, &comparator);
-        let centroids = Self::random_centroids(number_of_centroids, &comparator);
+        let centroids = keepalive!(
+            progress,
+            Self::random_centroids(number_of_centroids, &comparator)
+        );
         eprintln!("Number of centroids: {}", centroids.len());
 
         let vector_ids = (0..centroids.len()).map(VectorId).collect();
@@ -311,8 +315,7 @@ impl<
         };
         let mut vids: Vec<VectorId> = Vec::new();
         eprintln!("quantizing");
-        {
-            let _guard = progress.keep_alive(); // TODO keep track
+        keepalive!(progress, {
             for chunk in comparator.vector_chunks() {
                 let quantized: Vec<_> = chunk
                     .into_par_iter()
@@ -321,7 +324,7 @@ impl<
 
                 vids.extend(quantized_comparator.store(Box::new(quantized.into_iter())));
             }
-        }
+        });
 
         eprintln!("generating");
         let hnsw: Hnsw<QuantizedComparator> =

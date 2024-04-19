@@ -1,14 +1,22 @@
 use std::any::Any;
 
+use thiserror::Error;
+
 pub struct ProgressUpdate {}
+#[derive(Debug, Error)]
+#[error("interrupted")]
 pub struct Interrupt;
 
 pub trait ProgressMonitor: Send {
+    fn alive(&mut self) -> Result<(), Interrupt>;
     fn update(&mut self, update: ProgressUpdate) -> Result<(), Interrupt>;
     fn keep_alive(&mut self) -> Box<dyn Any>;
 }
 
 impl ProgressMonitor for () {
+    fn alive(&mut self) -> Result<(), Interrupt> {
+        Ok(())
+    }
     fn update(&mut self, _update: ProgressUpdate) -> Result<(), Interrupt> {
         Ok(())
     }
@@ -19,6 +27,9 @@ impl ProgressMonitor for () {
 }
 
 impl ProgressMonitor for Box<dyn ProgressMonitor> {
+    fn alive(&mut self) -> Result<(), Interrupt> {
+        (**self).alive()
+    }
     fn update(&mut self, update: ProgressUpdate) -> Result<(), Interrupt> {
         (**self).update(update)
     }
@@ -28,7 +39,12 @@ impl ProgressMonitor for Box<dyn ProgressMonitor> {
     }
 }
 
-pub fn keep_alive_while<T>(monitor: &mut impl ProgressMonitor, mut f: impl FnMut() -> T) -> T {
-    let _guard = monitor.keep_alive();
-    f()
+#[macro_export]
+macro_rules! keepalive {
+    ($live: expr, $body: expr) => {{
+        {
+            let _guard = $live.keep_alive();
+            $body
+        }
+    }};
 }

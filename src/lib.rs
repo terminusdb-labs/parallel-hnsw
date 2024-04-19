@@ -838,6 +838,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         // eprintln!("neighborhood_size: {neighborhood_size}");
         // eprintln!("total_size: {total_size}");
         // eprintln!("layer count: {layer_count}");
+        // TODO: keeping a keepalive around for this entire generate is bad style!
         let _keep_alive = progress.keep_alive();
         let mut partitions = calculate_partitions(total_size, bp.order);
         eprintln!("generate with partitions: {partitions:?}");
@@ -1549,6 +1550,7 @@ impl<C: Comparator + 'static> Hnsw<C> {
         last_recall: Option<f32>,
         progress: &mut dyn ProgressMonitor,
     ) -> (f32, usize) {
+        // TODO: holding a guard for the duration of the entire function is bad style!
         let _guard = progress.keep_alive();
         let op = bp.optimization;
         let promotion_threshold = op.promotion_threshold;
